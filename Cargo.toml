@@ -1,0 +1,8 @@
+[package]
+name = "convert-array"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+arrow = "55.2.0"
+bit-vec = "0.8.0"
