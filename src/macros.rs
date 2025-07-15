@@ -1,5 +1,3 @@
-
-
 #[macro_export]
 macro_rules! for_all_primitivetype {
     ($macro:tt) => {
@@ -36,6 +34,24 @@ macro_rules! for_all_primitivetype_with_variant {
     }
 }
 
+#[macro_export]
+macro_rules! for_all_primitivetype_with_option_variant {
+    ($macro:tt) => {
+        $macro! {
+            (i8,  Int8Type, OptionalInt8),
+            (i16, Int16Type, OptionalInt16),
+            (i32, Int32Type, OptionalInt32),
+            (i64, Int64Type, OptionalInt64),
+            (u8,  UInt8Type, OptionalUInt8),
+            (u16, UInt16Type, OptionalUInt16),
+            (u32, UInt32Type, OptionalUInt32),
+            (u64, UInt64Type, OptionalUInt64),
+            (f32, Float32Type, OptionalFloat32),
+            (f64, Float64Type, OptionalFloat64)
+        }
+    }
+}
+
 
 #[macro_export]
 macro_rules! for_all_timetypes {
@@ -53,6 +69,26 @@ macro_rules! for_all_timetypes {
             (DurationMillisecond, DurationMillisecondType, DurationMillisecond, i64),
             (DurationMicrosecond, DurationMicrosecondType, DurationMicrosecond, i64),
             (DurationNanosecond, DurationNanosecondType, DurationNanosecond, i64)
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! for_all_option_timetypes {
+    ($macro:tt) => {
+        $macro! {
+            (TimestampSecond, TimestampSecondType, OptionalTimestampSecond, i64),
+            (TimestampMillisecond, TimestampMillisecondType, OptionalTimestampMillisecond, i64),
+            (TimestampMicrosecond, TimestampMicrosecondType, OptionalTimestampMicrosecond, i64),
+            (TimestampNanosecond, TimestampNanosecondType, OptionalTimestampNanosecond, i64),
+            (Time32Second, Time32SecondType, OptionalTime32Second, i32),
+            (Time32Millisecond, Time32MillisecondType, OptionalTime32Millisecond, i32),
+            (Time64Microsecond, Time64MicrosecondType, OptionalTime64Microsecond, i64),
+            (Time64Nanosecond, Time64NanosecondType, OptionalTime64Nanosecond, i64),
+            (DurationSecond, DurationSecondType, OptionalDurationSecond, i64),
+            (DurationMillisecond, DurationMillisecondType, OptionalDurationMillisecond, i64),
+            (DurationMicrosecond, DurationMicrosecondType, OptionalDurationMicrosecond, i64),
+            (DurationNanosecond, DurationNanosecondType, OptionalDurationNanosecond, i64)
         }
     }
 }
@@ -77,6 +113,35 @@ macro_rules! for_all_arraytypes {
     }
 }
 
-
-
-
+/// Macro to register a struct type for runtime conversion
+/// 
+/// Usage:
+/// ```rust
+/// register_struct!(MyStruct, schema, {
+///     "field1" => field1,
+///     "field2" => field2,
+/// });
+/// ```
+#[macro_export]
+macro_rules! register_struct {
+    ($struct_type:ty, $schema:expr, { $($field_name:literal => $field_ident:ident),* $(,)? }) => {
+        
+        // Implement FieldExtractor for the specific struct type
+        impl crate::array::nested_array::FieldExtractor for $struct_type {
+            fn extract_field(&self, field_name: &str, data_type: &arrow::datatypes::DataType) -> Option<crate::datatype::DynScalar> {
+                use std::any::Any;
+                use crate::array::dispatch::convert_dyn_scalar;
+                
+                match field_name {
+                    $(
+                        $field_name => {
+                            let field_value = &self.$field_ident;
+                            Some(convert_dyn_scalar(field_value as &dyn Any, data_type))
+                        }
+                    )*
+                    _ => None,
+                }
+            }
+        }
+    };
+}

@@ -38,12 +38,6 @@ pub struct DurationMicrosecond(pub i64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DurationNanosecond(pub i64);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Decimal128Value {
-    pub value: i128,
-    pub precision: u8,
-    pub scale: i8,
-}
 
 
 /// Implements ArrowTyped trait and From conversions for time-related types.

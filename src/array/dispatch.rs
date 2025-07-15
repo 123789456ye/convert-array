@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::sync::Arc;
 use std::collections::HashMap;
 
@@ -5,27 +6,9 @@ use arrow::array::{ArrayRef, ListArray, MapArray, StructArray};
 use arrow::datatypes::*;
 use arrow::buffer::OffsetBuffer;
 
+use crate::array::primitive_array::Decimal128Value;
+use crate::array::time_array::*;
 use crate::datatype::DynScalar;
-
-// Macro to generate dictionary builders for all key types
-macro_rules! build_dictionary_array {
-    ($key_type:ty, $values:expr) => {{
-        let mut builder = arrow::array::StringDictionaryBuilder::<$key_type>::new();
-        for value in $values {
-            match value {
-                DynScalar::Dictionary(_, value_scalar) => {
-                    match value_scalar.as_ref() {
-                        DynScalar::String(s) => builder.append_value(s),
-                        _ => builder.append_null(),
-                    }
-                }
-                DynScalar::Null => builder.append_null(),
-                _ => panic!("Type mismatch: expected Dictionary or Null, got {:?}", value),
-            }
-        }
-        Arc::new(builder.finish())
-    }};
-}
 
 /// Converts a Vec<DynScalar> to an Arrow ArrayRef using Arrow builders for optimal performance.
 /// This function uses builders consistently across all data types for better efficiency.
@@ -188,109 +171,6 @@ pub fn dyn_scalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> 
                 }
             }
             Arc::new(builder.finish())
-        }
-        
-        // Dictionary types using optimized builders
-        DataType::Dictionary(key_type, value_type) => {
-            match (key_type.as_ref(), value_type.as_ref()) {
-                (DataType::Int8, DataType::Utf8) => build_dictionary_array!(arrow::datatypes::Int8Type, values),
-                (DataType::Int16, DataType::Utf8) => build_dictionary_array!(arrow::datatypes::Int16Type, values),
-                (DataType::Int32, DataType::Utf8) => build_dictionary_array!(arrow::datatypes::Int32Type, values),
-                (DataType::Int64, DataType::Utf8) => build_dictionary_array!(arrow::datatypes::Int64Type, values),
-                (DataType::UInt8, DataType::Utf8) => build_dictionary_array!(arrow::datatypes::UInt8Type, values),
-                (DataType::UInt16, DataType::Utf8) => build_dictionary_array!(arrow::datatypes::UInt16Type, values),
-                (DataType::UInt32, DataType::Utf8) => build_dictionary_array!(arrow::datatypes::UInt32Type, values),
-                (DataType::UInt64, DataType::Utf8) => build_dictionary_array!(arrow::datatypes::UInt64Type, values),
-                _ => {
-                    // Fallback for non-string dictionary value types
-                    // Use manual construction with builders for better null handling
-                    let mut keys_vec = Vec::new();
-                    let mut null_mask = Vec::new();
-                    let mut values_set = std::collections::HashMap::new();
-                    let mut values_vec = Vec::new();
-                    let mut next_key_idx = 0;
-                    
-                    for value in &values {
-                        match value {
-                            DynScalar::Dictionary(_, value_scalar) => {
-                                let value_str = format!("{:?}", value_scalar);
-                                if !values_set.contains_key(&value_str) {
-                                    values_set.insert(value_str.clone(), next_key_idx);
-                                    values_vec.push(value_scalar.as_ref().clone());
-                                    next_key_idx += 1;
-                                }
-                                let key_idx = values_set[&value_str];
-                                keys_vec.push(key_idx);
-                                null_mask.push(true);
-                            }
-                            DynScalar::Null => {
-                                keys_vec.push(0);
-                                null_mask.push(false);
-                            }
-                            _ => panic!("Type mismatch: expected Dictionary or Null, got {:?}", value),
-                        }
-                    }
-                    
-                    let values_array = dyn_scalar_vec_to_array(values_vec, value_type);
-                    let validity = if null_mask.iter().all(|&x| x) {
-                        None
-                    } else {
-                        Some(arrow::buffer::NullBuffer::from(arrow::buffer::BooleanBuffer::from(null_mask)))
-                    };
-                    
-                    match key_type.as_ref() {
-                        DataType::Int8 => {
-                            let keys: Vec<i8> = keys_vec.iter().map(|&k| k as i8).collect();
-                            let keys_array = arrow::array::Int8Array::new(keys.into(), validity);
-                            let dict_array = arrow::array::DictionaryArray::try_new(keys_array, values_array).unwrap();
-                            Arc::new(dict_array)
-                        }
-                        DataType::Int16 => {
-                            let keys: Vec<i16> = keys_vec.iter().map(|&k| k as i16).collect();
-                            let keys_array = arrow::array::Int16Array::new(keys.into(), validity);
-                            let dict_array = arrow::array::DictionaryArray::try_new(keys_array, values_array).unwrap();
-                            Arc::new(dict_array)
-                        }
-                        DataType::Int32 => {
-                            let keys: Vec<i32> = keys_vec.iter().map(|&k| k as i32).collect();
-                            let keys_array = arrow::array::Int32Array::new(keys.into(), validity);
-                            let dict_array = arrow::array::DictionaryArray::try_new(keys_array, values_array).unwrap();
-                            Arc::new(dict_array)
-                        }
-                        DataType::Int64 => {
-                            let keys: Vec<i64> = keys_vec.iter().map(|&k| k as i64).collect();
-                            let keys_array = arrow::array::Int64Array::new(keys.into(), validity);
-                            let dict_array = arrow::array::DictionaryArray::try_new(keys_array, values_array).unwrap();
-                            Arc::new(dict_array)
-                        }
-                        DataType::UInt8 => {
-                            let keys: Vec<u8> = keys_vec.iter().map(|&k| k as u8).collect();
-                            let keys_array = arrow::array::UInt8Array::new(keys.into(), validity);
-                            let dict_array = arrow::array::DictionaryArray::try_new(keys_array, values_array).unwrap();
-                            Arc::new(dict_array)
-                        }
-                        DataType::UInt16 => {
-                            let keys: Vec<u16> = keys_vec.iter().map(|&k| k as u16).collect();
-                            let keys_array = arrow::array::UInt16Array::new(keys.into(), validity);
-                            let dict_array = arrow::array::DictionaryArray::try_new(keys_array, values_array).unwrap();
-                            Arc::new(dict_array)
-                        }
-                        DataType::UInt32 => {
-                            let keys: Vec<u32> = keys_vec.iter().map(|&k| k as u32).collect();
-                            let keys_array = arrow::array::UInt32Array::new(keys.into(), validity);
-                            let dict_array = arrow::array::DictionaryArray::try_new(keys_array, values_array).unwrap();
-                            Arc::new(dict_array)
-                        }
-                        DataType::UInt64 => {
-                            let keys: Vec<u64> = keys_vec.iter().map(|&k| k as u64).collect();
-                            let keys_array = arrow::array::UInt64Array::new(keys.into(), validity);
-                            let dict_array = arrow::array::DictionaryArray::try_new(keys_array, values_array).unwrap();
-                            Arc::new(dict_array)
-                        }
-                        _ => panic!("Unsupported dictionary key type: {:?}", key_type),
-                    }
-                }
-            }
         }
         
         // Complex nested types using builders where possible
@@ -507,6 +387,76 @@ pub fn dyn_scalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> 
     }
 }
 
+/// Dispatch Any data to appropriate DynScalar type based on Arrow DataType.
+pub fn convert_dyn_scalar(data: &dyn Any, data_type: &DataType) -> DynScalar {
+    match data_type {
+        DataType::Boolean => DynScalar::Bool(*data.downcast_ref::<bool>().unwrap()),
+        DataType::Int8 => DynScalar::Int8(*data.downcast_ref::<i8>().unwrap()),
+        DataType::Int16 => DynScalar::Int16(*data.downcast_ref::<i16>().unwrap()),
+        DataType::Int32 => DynScalar::Int32(*data.downcast_ref::<i32>().unwrap()),
+        DataType::Int64 => DynScalar::Int64(*data.downcast_ref::<i64>().unwrap()),
+        DataType::UInt8 => DynScalar::UInt8(*data.downcast_ref::<u8>().unwrap()),
+        DataType::UInt16 => DynScalar::UInt16(*data.downcast_ref::<u16>().unwrap()),
+        DataType::UInt32 => DynScalar::UInt32(*data.downcast_ref::<u32>().unwrap()),
+        DataType::UInt64 => DynScalar::UInt64(*data.downcast_ref::<u64>().unwrap()),
+        DataType::Float32 => DynScalar::Float32(*data.downcast_ref::<f32>().unwrap()),
+        DataType::Float64 => DynScalar::Float64(*data.downcast_ref::<f64>().unwrap()),
+        DataType::Utf8 => {
+            // Handle both String and Option<String>
+            if let Some(s) = data.downcast_ref::<String>() {
+                DynScalar::String(s.clone())
+            } else if let Some(opt_s) = data.downcast_ref::<Option<String>>() {
+                DynScalar::OptionalString(opt_s.clone())
+            } else {
+                panic!("Failed to downcast to String or Option<String>");
+            }
+        },
+        DataType::Binary => DynScalar::Binary(data.downcast_ref::<Vec<u8>>().unwrap().clone()),
+        DataType::List(_) => DynScalar::List(data.downcast_ref::<Vec<DynScalar>>().unwrap().clone()),
+        DataType::Struct(_) => DynScalar::Struct(data.downcast_ref::<HashMap<String, DynScalar>>().unwrap().clone()),
+        DataType::Map(_, _) => DynScalar::Map(data.downcast_ref::<Vec<(DynScalar, DynScalar)>>().unwrap().clone()),
+        DataType::FixedSizeList(_, size) => DynScalar::FixedSizeList(data.downcast_ref::<Vec<DynScalar>>().unwrap().clone(), *size),
+        DataType::Timestamp(unit, _) => {
+            match unit {
+                TimeUnit::Second => DynScalar::TimestampSecond(TimestampSecond(*data.downcast_ref::<i64>().unwrap())),
+                TimeUnit::Millisecond => DynScalar::TimestampMillisecond(TimestampMillisecond(*data.downcast_ref::<i64>().unwrap())),
+                TimeUnit::Microsecond => DynScalar::TimestampMicrosecond(TimestampMicrosecond(*data.downcast_ref::<i64>().unwrap())),
+                TimeUnit::Nanosecond => DynScalar::TimestampNanosecond(TimestampNanosecond(*data.downcast_ref::<i64>().unwrap())),
+            }
+        },
+        DataType::Time32(unit) => {
+            match unit {
+                TimeUnit::Second => DynScalar::Time32Second(Time32Second(*data.downcast_ref::<i32>().unwrap())),
+                TimeUnit::Millisecond => DynScalar::Time32Millisecond(Time32Millisecond(*data.downcast_ref::<i32>().unwrap())),
+                _ => panic!("Unsupported Time32 unit: {:?}", unit),
+            }
+        },
+        DataType::Time64(unit) => {
+            match unit {
+                TimeUnit::Microsecond => DynScalar::Time64Microsecond(Time64Microsecond(*data.downcast_ref::<i64>().unwrap())),
+                TimeUnit::Nanosecond => DynScalar::Time64Nanosecond(Time64Nanosecond(*data.downcast_ref::<i64>().unwrap())),
+                _ => panic!("Unsupported Time64 unit: {:?}", unit),
+            }
+        },
+        DataType::Duration(unit) => {
+            match unit {
+                TimeUnit::Second => DynScalar::DurationSecond(DurationSecond(*data.downcast_ref::<i64>().unwrap())),
+                TimeUnit::Millisecond => DynScalar::DurationMillisecond(DurationMillisecond(*data.downcast_ref::<i64>().unwrap())),
+                TimeUnit::Microsecond => DynScalar::DurationMicrosecond(DurationMicrosecond(*data.downcast_ref::<i64>().unwrap())),
+                TimeUnit::Nanosecond => DynScalar::DurationNanosecond(DurationNanosecond(*data.downcast_ref::<i64>().unwrap())),
+            }
+        },
+        DataType::Decimal128(precision, scale) => {
+            DynScalar::Decimal128(Decimal128Value {
+                value: *data.downcast_ref::<i128>().unwrap(),
+                precision: *precision,
+                scale: *scale,
+            })
+        },
+        _ => panic!("Unsupported data type for default: {:?}", data_type),
+    }
+}
+
 /// Returns a default DynScalar value for the given Arrow DataType.
 /// Used for filling missing values in struct fields.
 pub fn default_dyn_scalar(data_type: &DataType) -> DynScalar {
@@ -527,54 +477,39 @@ pub fn default_dyn_scalar(data_type: &DataType) -> DynScalar {
         DataType::List(_) => DynScalar::List(Vec::new()),
         DataType::Struct(_) => DynScalar::Struct(HashMap::new()),
         DataType::Map(_, _) => DynScalar::Map(Vec::new()),
-        DataType::Dictionary(key_type, value_type) => {
-            let default_key = match key_type.as_ref() {
-                DataType::Int8 => DynScalar::Int8(0),
-                DataType::Int16 => DynScalar::Int16(0),
-                DataType::Int32 => DynScalar::Int32(0),
-                DataType::Int64 => DynScalar::Int64(0),
-                DataType::UInt8 => DynScalar::UInt8(0),
-                DataType::UInt16 => DynScalar::UInt16(0),
-                DataType::UInt32 => DynScalar::UInt32(0),
-                DataType::UInt64 => DynScalar::UInt64(0),
-                _ => panic!("Unsupported dictionary key type: {:?}", key_type),
-            };
-            let default_value = default_dyn_scalar(value_type);
-            DynScalar::Dictionary(Box::new(default_key), Box::new(default_value))
-        },
         DataType::FixedSizeList(_, size) => DynScalar::FixedSizeList(Vec::new(), *size),
         DataType::Timestamp(unit, _) => {
             match unit {
-                TimeUnit::Second => DynScalar::TimestampSecond(crate::array::time_array::TimestampSecond(0)),
-                TimeUnit::Millisecond => DynScalar::TimestampMillisecond(crate::array::time_array::TimestampMillisecond(0)),
-                TimeUnit::Microsecond => DynScalar::TimestampMicrosecond(crate::array::time_array::TimestampMicrosecond(0)),
-                TimeUnit::Nanosecond => DynScalar::TimestampNanosecond(crate::array::time_array::TimestampNanosecond(0)),
+                TimeUnit::Second => DynScalar::TimestampSecond(TimestampSecond(0)),
+                TimeUnit::Millisecond => DynScalar::TimestampMillisecond(TimestampMillisecond(0)),
+                TimeUnit::Microsecond => DynScalar::TimestampMicrosecond(TimestampMicrosecond(0)),
+                TimeUnit::Nanosecond => DynScalar::TimestampNanosecond(TimestampNanosecond(0)),
             }
         },
         DataType::Time32(unit) => {
             match unit {
-                TimeUnit::Second => DynScalar::Time32Second(crate::array::time_array::Time32Second(0)),
-                TimeUnit::Millisecond => DynScalar::Time32Millisecond(crate::array::time_array::Time32Millisecond(0)),
+                TimeUnit::Second => DynScalar::Time32Second(Time32Second(0)),
+                TimeUnit::Millisecond => DynScalar::Time32Millisecond(Time32Millisecond(0)),
                 _ => panic!("Unsupported Time32 unit: {:?}", unit),
             }
         },
         DataType::Time64(unit) => {
             match unit {
-                TimeUnit::Microsecond => DynScalar::Time64Microsecond(crate::array::time_array::Time64Microsecond(0)),
-                TimeUnit::Nanosecond => DynScalar::Time64Nanosecond(crate::array::time_array::Time64Nanosecond(0)),
+                TimeUnit::Microsecond => DynScalar::Time64Microsecond(Time64Microsecond(0)),
+                TimeUnit::Nanosecond => DynScalar::Time64Nanosecond(Time64Nanosecond(0)),
                 _ => panic!("Unsupported Time64 unit: {:?}", unit),
             }
         },
         DataType::Duration(unit) => {
             match unit {
-                TimeUnit::Second => DynScalar::DurationSecond(crate::array::time_array::DurationSecond(0)),
-                TimeUnit::Millisecond => DynScalar::DurationMillisecond(crate::array::time_array::DurationMillisecond(0)),
-                TimeUnit::Microsecond => DynScalar::DurationMicrosecond(crate::array::time_array::DurationMicrosecond(0)),
-                TimeUnit::Nanosecond => DynScalar::DurationNanosecond(crate::array::time_array::DurationNanosecond(0)),
+                TimeUnit::Second => DynScalar::DurationSecond(DurationSecond(0)),
+                TimeUnit::Millisecond => DynScalar::DurationMillisecond(DurationMillisecond(0)),
+                TimeUnit::Microsecond => DynScalar::DurationMicrosecond(DurationMicrosecond(0)),
+                TimeUnit::Nanosecond => DynScalar::DurationNanosecond(DurationNanosecond(0)),
             }
         },
         DataType::Decimal128(precision, scale) => {
-            DynScalar::Decimal128(crate::array::time_array::Decimal128Value {
+            DynScalar::Decimal128(Decimal128Value {
                 value: 0,
                 precision: *precision,
                 scale: *scale,
@@ -604,7 +539,6 @@ pub fn default_optional_dyn_scalar(data_type: &DataType) -> DynScalar {
         DataType::List(_) => DynScalar::OptionalList(None),
         DataType::Struct(_) => DynScalar::OptionalStruct(None),
         DataType::Map(_, _) => DynScalar::OptionalMap(None),
-        DataType::Dictionary(_, _) => DynScalar::OptionalDictionary(None, None),
         DataType::FixedSizeList(_, size) => DynScalar::OptionalFixedSizeList(None, *size),
         DataType::Timestamp(unit, _) => {
             match unit {
@@ -644,124 +578,8 @@ pub fn default_optional_dyn_scalar(data_type: &DataType) -> DynScalar {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Array, DictionaryArray, StringArray, StringDictionaryBuilder};
-    use arrow::datatypes::{DataType, Int32Type};
-
-    #[test]
-    fn test_dictionary_array_vs_builder() {
-        // Test data: ["a", "a", "b", "c", "a"]
-        let input_values = vec![
-            DynScalar::Dictionary(Box::new(DynScalar::Int32(0)), Box::new(DynScalar::String("a".to_string()))),
-            DynScalar::Dictionary(Box::new(DynScalar::Int32(0)), Box::new(DynScalar::String("a".to_string()))),
-            DynScalar::Dictionary(Box::new(DynScalar::Int32(1)), Box::new(DynScalar::String("b".to_string()))),
-            DynScalar::Dictionary(Box::new(DynScalar::Int32(2)), Box::new(DynScalar::String("c".to_string()))),
-            DynScalar::Dictionary(Box::new(DynScalar::Int32(0)), Box::new(DynScalar::String("a".to_string()))),
-        ];
-
-        let data_type = DataType::Dictionary(
-            Box::new(DataType::Int32),
-            Box::new(DataType::Utf8),
-        );
-
-        // Create array using our implementation
-        let our_array = dyn_scalar_vec_to_array(input_values, &data_type);
-        
-        // Create array using Arrow builder
-        let mut builder = StringDictionaryBuilder::<Int32Type>::new();
-        builder.append_value("a");
-        builder.append_value("a");
-        builder.append_value("b");
-        builder.append_value("c");
-        builder.append_value("a");
-        let expected_array = builder.finish();
-
-        // Compare the arrays
-        let our_dict = our_array.as_any().downcast_ref::<DictionaryArray<Int32Type>>().unwrap();
-        let expected_dict = &expected_array;
-
-        // Compare keys
-        assert_eq!(our_dict.keys().len(), expected_dict.keys().len());
-        
-        // Compare values (dictionary)
-        let our_values = our_dict.values().as_any().downcast_ref::<StringArray>().unwrap();
-        let expected_values = expected_dict.values().as_any().downcast_ref::<StringArray>().unwrap();
-        
-        assert_eq!(*our_values, *expected_values);
-        // The values arrays should contain the same unique strings (order might differ)
-        let our_values_set: std::collections::HashSet<_> = (0..our_values.len()).map(|i| our_values.value(i)).collect();
-        let expected_values_set: std::collections::HashSet<_> = (0..expected_values.len()).map(|i| expected_values.value(i)).collect();
-        assert_eq!(our_values_set, expected_values_set);
-
-        // Compare logical values by iterating through both arrays
-        let our_logical: Vec<_> = our_dict.downcast_dict::<StringArray>().unwrap().into_iter().collect();
-        let expected_logical: Vec<_> = expected_dict.downcast_dict::<StringArray>().unwrap().into_iter().collect();
-        
-        assert_eq!(our_logical, expected_logical);
-        assert_eq!(our_logical, vec![Some("a"), Some("a"), Some("b"), Some("c"), Some("a")]);
-    }
-
-    #[test]
-    fn test_dictionary_array_with_nulls() {
-        // Test data: ["a", null, "b", "a", null]
-        let input_values = vec![
-            DynScalar::Dictionary(Box::new(DynScalar::Int32(0)), Box::new(DynScalar::String("a".to_string()))),
-            DynScalar::Null,
-            DynScalar::Dictionary(Box::new(DynScalar::Int32(1)), Box::new(DynScalar::String("b".to_string()))),
-            DynScalar::Dictionary(Box::new(DynScalar::Int32(0)), Box::new(DynScalar::String("a".to_string()))),
-            DynScalar::Null,
-        ];
-
-        let data_type = DataType::Dictionary(
-            Box::new(DataType::Int32),
-            Box::new(DataType::Utf8),
-        );
-
-        // Create array using our implementation
-        let our_array = dyn_scalar_vec_to_array(input_values, &data_type);
-        
-        // Create array using Arrow builder
-        let mut builder = StringDictionaryBuilder::<Int32Type>::new();
-        builder.append_value("a");
-        builder.append_null();
-        builder.append_value("b");
-        builder.append_value("a");
-        builder.append_null();
-        let expected_array = builder.finish();
-
-        // Compare logical values
-        let our_dict = our_array.as_any().downcast_ref::<DictionaryArray<Int32Type>>().unwrap();
-        let expected_dict = &expected_array;
-
-        let our_logical: Vec<_> = our_dict.downcast_dict::<StringArray>().unwrap().into_iter().collect();
-        let expected_logical: Vec<_> = expected_dict.downcast_dict::<StringArray>().unwrap().into_iter().collect();
-        
-        assert_eq!(our_logical, expected_logical);
-        assert_eq!(our_logical, vec![Some("a"), None, Some("b"), Some("a"), None]);
-    }
-
-    #[test]
-    fn test_dictionary_array_different_key_types() {
-        // Test with Int8 keys
-        let input_values = vec![
-            DynScalar::Dictionary(Box::new(DynScalar::Int8(0)), Box::new(DynScalar::String("x".to_string()))),
-            DynScalar::Dictionary(Box::new(DynScalar::Int8(0)), Box::new(DynScalar::String("x".to_string()))),
-            DynScalar::Dictionary(Box::new(DynScalar::Int8(1)), Box::new(DynScalar::String("y".to_string()))),
-        ];
-
-        let data_type = DataType::Dictionary(
-            Box::new(DataType::Int8),
-            Box::new(DataType::Utf8),
-        );
-
-        let our_array = dyn_scalar_vec_to_array(input_values, &data_type);
-        let our_dict = our_array.as_any().downcast_ref::<DictionaryArray<arrow::datatypes::Int8Type>>().unwrap();
-        
-        let logical_values: Vec<_> = our_dict.downcast_dict::<StringArray>().unwrap().into_iter().collect();
-        assert_eq!(logical_values, vec![Some("x"), Some("x"), Some("y")]);
-        
-        // Verify key type
-        assert_eq!(our_dict.keys().data_type(), &DataType::Int8);
-    }
+    use arrow::array::{Array};
+    use arrow::datatypes::{DataType};
 
     #[test]
     fn test_optional_primitive_types() {

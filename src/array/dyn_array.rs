@@ -6,9 +6,9 @@ use arrow::datatypes::*;
 use bit_vec::BitVec;
 
 use crate::datatype::{DynScalar};
-use crate::array::primitive_array::{BinaryVec, BoolVec, NativeArray, StringVec, TypedVec};
+use crate::array::primitive_array::{BinaryOptVec, BinaryVec, BoolOptVec, BoolVec, Decimal128OptVec, Decimal128Value, NativeArray, StringOptVec, StringVec, TypedOptVec, TypedVec};
 use crate::array::time_array::*;
-use crate::{for_all_primitivetype_with_variant, for_all_timetypes};
+use crate::{for_all_option_timetypes, for_all_primitivetype_with_option_variant, for_all_primitivetype_with_variant, for_all_timetypes};
 
 /// Trait for dynamic native arrays that can handle DynScalar values.
 /// Provides type-erased operations for arrays of different types.
@@ -52,13 +52,13 @@ macro_rules! impl_dynnativearray_for_primitive {
                         Some(DynScalar::$dyn_variant(*<Self as NativeArray>::get(self, index)))
                     }
                 }
-                fn as_native_array(&self) -> &dyn std::any::Any {
+                fn as_native_array(&self) -> &dyn Any {
                     self
                 }
-                fn as_native_array_mut(&mut self) -> &mut dyn std::any::Any {
+                fn as_native_array_mut(&mut self) -> &mut dyn Any {
                     self
                 }
-                fn to_arrow_array(&self) -> arrow::array::ArrayRef {
+                fn to_arrow_array(&self) -> ArrayRef {
                     Arc::new(<Self as NativeArray>::to_arrow_array(self))
                 }
             }
@@ -98,7 +98,7 @@ macro_rules! impl_dynnativearray_for_time {
                 fn as_native_array_mut(&mut self) -> &mut dyn Any {
                     self
                 }
-                fn to_arrow_array(&self) -> arrow::array::ArrayRef {
+                fn to_arrow_array(&self) -> ArrayRef {
                     Arc::new(<Self as NativeArray>::to_arrow_array(self))
                 }
             }
@@ -135,7 +135,7 @@ impl DynNativeArray<String> for StringVec {
     fn as_native_array_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn to_arrow_array(&self) -> arrow::array::ArrayRef {
+    fn to_arrow_array(&self) -> ArrayRef {
         Arc::new(<Self as NativeArray>::to_arrow_array(self))
     }
 }
@@ -166,7 +166,7 @@ impl DynNativeArray<Vec<u8>> for BinaryVec {
     fn as_native_array_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn to_arrow_array(&self) -> arrow::array::ArrayRef {
+    fn to_arrow_array(&self) -> ArrayRef {
         Arc::new(<Self as NativeArray>::to_arrow_array(self))
     }
 }
@@ -247,6 +247,122 @@ macro_rules! impl_makedynarray_for_time {
 for_all_primitivetype_with_variant!(impl_makedynarray_for_primitive);
 for_all_timetypes!(impl_makedynarray_for_time);
 
+macro_rules! impl_dynnativearray_for_option_primitive {
+    ($(($native_type:ty, $arrow_type:ty, $dyn_variant:ident)),*) => {
+        $(
+            impl DynNativeArray<Option<$native_type>> for TypedOptVec<$arrow_type> {
+                fn new() -> Box<dyn DynNativeArray<Option<$native_type>>> {
+                    Box::new(TypedOptVec::<$arrow_type>::from_vec(Vec::new()))
+                }
+                fn push(&mut self, value: DynScalar) -> Result<(), String> {
+                    match value {
+                        DynScalar::$dyn_variant(x) => {
+                            <Self as NativeArray>::push(self, x);
+                            Ok(())
+                        }
+                        _ => Err(format!("Type mismatch")),
+                    }
+                }
+                fn get(&self, index: usize) -> Option<DynScalar> {
+                    if index >= <Self as NativeArray>::to_arrow_array(self).len() {
+                        None
+                    } else {
+                        let ref_val = <Self as NativeArray>::get(self, index);
+                        Some(DynScalar::$dyn_variant(ref_val.clone()))
+                    }
+                }
+                fn as_native_array(&self) -> &dyn Any {
+                    self
+                }
+                fn as_native_array_mut(&mut self) -> &mut dyn Any {
+                    self
+                }
+                fn to_arrow_array(&self) -> ArrayRef {
+                    Arc::new(<Self as NativeArray>::to_arrow_array(self))
+                }
+            }
+        )*
+    }
+}
+
+macro_rules! impl_makedynarray_for_option_primitive {
+    ($(($native_type:ty, $arrow_type:ty, $dyn_variant:ident)),*) => {
+        $(
+            impl Into<DynScalar> for Option<$native_type> {
+                fn into(self) -> DynScalar {
+                    DynScalar::$dyn_variant(self)
+                }
+            }
+            impl MakeDynArray for Option<$native_type> {
+                fn make_array() -> Box<dyn DynNativeArray<Self>> {
+                    Box::new(TypedOptVec::<$arrow_type>::from_vec(Vec::new()))
+                }
+            }
+        )*
+    }
+}
+
+macro_rules! impl_dynnativearray_for_optional_time {
+    ($(($native_type:ty, $arrow_type:ty, $dyn_variant:ident, $inner_type:ty)),*) => {
+        $(
+            impl DynNativeArray<Option<$native_type>> for TypedOptVec<$arrow_type> {
+                fn new() -> Box<dyn DynNativeArray<Option<$native_type>>> {
+                    Box::new(TypedOptVec::<$arrow_type>::from_vec(Vec::new()))
+                }
+                fn push(&mut self, value: DynScalar) -> Result<(), String> {
+                    match value {
+                        DynScalar::$dyn_variant(x) => {
+                            <Self as NativeArray>::push(self, x.map(|t| t.into()));
+                            Ok(())
+                        }
+                        _ => Err(format!("Type mismatch")),
+                    }
+                }
+                fn get(&self, index: usize) -> Option<DynScalar> {
+                    if index >= <Self as NativeArray>::to_arrow_array(self).len() {
+                        None
+                    } else {
+                        let val = <Self as NativeArray>::get(self, index).map(|t| t.into()); 
+                        Some(DynScalar::$dyn_variant(val))
+                    }
+                }
+                fn as_native_array(&self) -> &dyn Any {
+                    self
+                }
+                fn as_native_array_mut(&mut self) -> &mut dyn Any {
+                    self
+                }
+                fn to_arrow_array(&self) -> ArrayRef {
+                    Arc::new(<Self as NativeArray>::to_arrow_array(self))
+                }
+            }
+        )*
+    }
+}
+
+macro_rules! impl_makedynarray_for_optional_time {
+    ($(($native_type:ty, $arrow_type:ty, $dyn_variant:ident, $inner_type:ty)),*) => {
+        $(
+            impl Into<DynScalar> for Option<$native_type> {
+                fn into(self) -> DynScalar {
+                    DynScalar::$dyn_variant(self)
+                }
+            }
+            impl MakeDynArray for Option<$native_type> {
+                fn make_array() -> Box<dyn DynNativeArray<Self>> {
+                    Box::new(TypedOptVec::<$arrow_type>::from_vec(Vec::new()))
+                }
+            }
+        )*
+    }
+}
+
+for_all_primitivetype_with_option_variant!(impl_dynnativearray_for_option_primitive);
+for_all_primitivetype_with_option_variant!(impl_makedynarray_for_option_primitive);
+
+for_all_option_timetypes!(impl_dynnativearray_for_optional_time);
+for_all_option_timetypes!(impl_makedynarray_for_optional_time);
+
 impl Into<DynScalar> for String {
     fn into(self) -> DynScalar {
         DynScalar::String(self)
@@ -259,17 +375,20 @@ impl MakeDynArray for String {
     }
 }
 
-impl Into<DynScalar> for Vec<u8> {
+/// Conflicting with Vec<T> to List.
+/// 
+/*impl Into<DynScalar> for Vec<u8> {
     fn into(self) -> DynScalar {
         DynScalar::Binary(self)
     }
-}
+}*/
 
 impl MakeDynArray for Vec<u8> {
     fn make_array() -> Box<dyn DynNativeArray<Self>> {
         Box::new(BinaryVec::from_vec(Vec::new()))
     }
 }
+
 impl Into<DynScalar> for bool {
     fn into(self) -> DynScalar {
         DynScalar::Bool(self)
@@ -279,6 +398,176 @@ impl Into<DynScalar> for bool {
 impl MakeDynArray for bool {
     fn make_array() -> Box<dyn DynNativeArray<Self>> {
         Box::new(BoolVec::from_vec(Vec::new()))
+    }
+}
+
+impl DynNativeArray<Option<String>> for StringOptVec {
+    fn new() -> Box<dyn DynNativeArray<Option<String>>> where Self: Sized {
+        Box::new(StringOptVec::from_vec(Vec::new()))
+    }
+    fn get(&self, index: usize) -> Option<DynScalar> {
+        if index >= <Self as NativeArray>::to_arrow_array(self).len() {
+            None
+        } else {
+            Some(DynScalar::OptionalString(<Self as NativeArray>::get(self, index).clone()))
+        }
+    }
+    fn push(&mut self, value: DynScalar) -> Result<(), String> {
+        match value {
+            DynScalar::OptionalString(x) => {
+                <Self as NativeArray>::push(self, x);
+                Ok(())
+            }
+            _ => Err(format!("Type mismatch")),
+        }
+    }
+    fn as_native_array(&self) -> &dyn Any {
+        self
+    }
+    fn as_native_array_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+    fn to_arrow_array(&self) -> ArrayRef {
+        Arc::new(<Self as NativeArray>::to_arrow_array(self))
+    }
+}
+
+impl Into<DynScalar> for Option<String> {
+    fn into(self) -> DynScalar {
+        DynScalar::OptionalString(self)
+    }
+}
+
+impl MakeDynArray for Option<String> {
+    fn make_array() -> Box<dyn DynNativeArray<Self>> {
+        Box::new(StringOptVec::from_vec(Vec::new()))
+    }
+}
+
+impl DynNativeArray<Option<Vec<u8>>> for BinaryOptVec {
+    fn new() -> Box<dyn DynNativeArray<Option<Vec<u8>>>> where Self: Sized {
+        Box::new(BinaryOptVec::from_vec(Vec::new()))
+    }
+    fn get(&self, index: usize) -> Option<DynScalar> {
+        if index >= <Self as NativeArray>::to_arrow_array(self).len() {
+            None
+        } else {
+            Some(DynScalar::OptionalBinary(<Self as NativeArray>::get(self, index).clone()))
+        }
+    }
+    fn push(&mut self, value: DynScalar) -> Result<(), String> {
+        match value {
+            DynScalar::OptionalBinary(x) => {
+                <Self as NativeArray>::push(self, x);
+                Ok(())
+            }
+            _ => Err(format!("Type mismatch")),
+        }
+    }
+    fn as_native_array(&self) -> &dyn Any {
+        self
+    }
+    fn as_native_array_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+    fn to_arrow_array(&self) -> ArrayRef {
+        Arc::new(<Self as NativeArray>::to_arrow_array(self))
+    }
+}
+impl Into<DynScalar> for Option<Vec<u8>> {
+    fn into(self) -> DynScalar {
+        DynScalar::OptionalBinary(self)
+    }
+}
+impl MakeDynArray for Option<Vec<u8>> {
+    fn make_array() -> Box<dyn DynNativeArray<Self>> {
+        Box::new(BinaryOptVec::from_vec(Vec::new()))
+    }
+}
+
+impl DynNativeArray<Option<bool>> for BoolOptVec {
+    fn new() -> Box<dyn DynNativeArray<Option<bool>>> where Self: Sized {
+        Box::new(BoolOptVec::from_vec(Vec::new()))
+    }
+    fn get(&self, index: usize) -> Option<DynScalar> {
+        if index >= <Self as NativeArray>::to_arrow_array(self).len() {
+            None
+        } else {
+            Some(DynScalar::OptionalBool(*<Self as NativeArray>::get(self, index)))
+        }
+    }
+    fn push(&mut self, value: DynScalar) -> Result<(), String> {
+        match value {
+            DynScalar::OptionalBool(x) => {
+                <Self as NativeArray>::push(self, x);
+                Ok(())
+            }
+            _ => Err(format!("Type mismatch")),
+        }
+    }
+    fn as_native_array(&self) -> &dyn Any {
+        self
+    }
+    fn as_native_array_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+    fn to_arrow_array(&self) -> ArrayRef {
+        Arc::new(<Self as NativeArray>::to_arrow_array(self))
+    }
+}
+
+impl Into<DynScalar> for Option<bool> {
+    fn into(self) -> DynScalar {
+        DynScalar::OptionalBool(self)
+    }
+}
+
+impl MakeDynArray for Option<bool> {
+    fn make_array() -> Box<dyn DynNativeArray<Self>> {
+        Box::new(BoolOptVec::from_vec(Vec::new()))
+    }
+}
+
+impl DynNativeArray<Option<Decimal128Value>> for Decimal128OptVec {
+    fn new() -> Box<dyn DynNativeArray<Option<Decimal128Value>>> where Self: Sized {
+        Box::new(Decimal128OptVec::from_vec(Vec::new()))
+    }
+    fn get(&self, index: usize) -> Option<DynScalar> {
+        if index >= <Self as NativeArray>::to_arrow_array(self).len() {
+            None
+        } else {
+            Some(DynScalar::OptionalDecimal128(*<Self as NativeArray>::get(self, index)))
+        }
+    }
+    fn push(&mut self, value: DynScalar) -> Result<(), String> {
+        match value {
+            DynScalar::OptionalDecimal128(x) => {
+                <Self as NativeArray>::push(self, x);
+                Ok(())
+            }
+            _ => Err(format!("Type mismatch")),
+        }
+    }
+    fn as_native_array(&self) -> &dyn Any {
+        self
+    }
+    fn as_native_array_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+    fn to_arrow_array(&self) -> ArrayRef {
+        Arc::new(<Self as NativeArray>::to_arrow_array(self))
+    }
+}
+
+impl Into<DynScalar> for Option<Decimal128Value> {
+    fn into(self) -> DynScalar {
+        DynScalar::OptionalDecimal128(self)
+    }
+}
+
+impl MakeDynArray for Option<Decimal128Value> {
+    fn make_array() -> Box<dyn DynNativeArray<Self>> {
+        Box::new(Decimal128OptVec::from_vec(Vec::new()))
     }
 }
 
@@ -325,8 +614,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{ArrayRef, BooleanArray, Int32Array};
+    use arrow::array::{ArrayRef, BooleanArray, Decimal128Array, Int32Array, TimestampSecondArray};
     use bit_vec::BitVec;
+
+    use crate::array::primitive_array::Decimal128Value;
 
     use super::*;
 
@@ -393,5 +684,45 @@ mod tests {
         let mut arr: Box<dyn DynNativeArray<String>> = new::<String>();
         arr.push(DynScalar::String("hello".to_string())).unwrap();
         assert_eq!(arr.get(0), Some(DynScalar::String("hello".to_string())));
+    }
+
+    #[test]
+    fn test_dyn_native_option_i32_array_to_arrow() {
+        let input = vec![Some(1i32), None, Some(42)];
+        let arr: ArrayRef = input.to_dyn_array().unwrap().to_arrow_array();
+        let arr = arr.as_any().downcast_ref::<Int32Array>().unwrap();
+        let expected = Arc::new(Int32Array::from(input.clone()));
+        assert_eq!(arr.values(), expected.values());
+    }
+
+    #[test] 
+    fn test_dyn_native_option_time_array_to_arrow() {
+        let input = vec![
+            Some(TimestampSecond::from(114514)),
+            None,
+            Some(TimestampSecond::from(1919810))
+        ];
+        let arr: ArrayRef = input.to_dyn_array().unwrap().to_arrow_array();
+        let arr = arr.as_any().downcast_ref::<TimestampSecondArray>().unwrap();
+        let expected = Arc::new(TimestampSecondArray::from(
+            input.iter().map(|opt| opt.map(|ts| ts.into())).collect::<Vec<_>>(),
+        ));
+        assert_eq!(arr.values(), expected.values());
+    }
+
+    #[test]
+    fn test_dyn_native_option_decimal_array_to_arrow() {
+        let input = vec![
+            Some(Decimal128Value { value: 12345, precision: 10, scale: 2 }),
+            None,
+            Some(Decimal128Value { value: 67890, precision: 10, scale: 2 }),
+        ];
+        let arr: ArrayRef = input.to_dyn_array().unwrap().to_arrow_array();
+        let arr = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
+        let expected = Arc::new(Decimal128Array::from(vec![Some(12345), None, Some(67890)]).with_precision_and_scale(10, 2).unwrap());
+        assert_eq!(arr.values(), expected.values());
+        assert_eq!(arr.precision(), expected.precision());
+        assert_eq!(arr.scale(), expected.scale());
+        assert_eq!(arr.is_null(1), expected.is_null(1));
     }
 }

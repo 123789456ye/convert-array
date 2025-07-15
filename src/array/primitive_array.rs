@@ -5,7 +5,6 @@ use arrow::datatypes::*;
 
 use bit_vec::BitVec;
 
-use crate::array::time_array::Decimal128Value;
 use crate::{for_all_primitivetype};
 
 /// Trait for native array implementations that can be converted to Arrow arrays.
@@ -26,7 +25,7 @@ where
     fn to_arrow_array(&self) -> Self::ArrowArray;
 }
 
-// ========== Primitive类型 ============
+// ========== Primitive Type ============
 
 /// A typed vector wrapper for Arrow primitive types.
 /// Stores native values and provides conversion to Arrow arrays.
@@ -65,7 +64,6 @@ where
 }
 
 
-/// Rust类型到Arrow Primitive类型的映射
 /// Maps Rust types to their corresponding Arrow primitive types.
 /// 
 /// This trait enables generic conversion from Vec<T> to TypedVec<T::ArrowType>
@@ -119,7 +117,7 @@ pub type UInt64Vec = TypedVec<UInt64Type>;
 pub type Float32Vec = TypedVec<Float32Type>;
 pub type Float64Vec = TypedVec<Float64Type>;
 
-// ========== Boolean 类型（使用BitVec） ==========
+// ========== Boolean Type (Using BitVec) ==========
 
 /// A vector for storing boolean values using BitVec for efficient storage.
 pub struct BoolVec {
@@ -234,7 +232,6 @@ macro_rules! impl_builder_vec {
             pub data: Vec<$item_type>,
         }
 
-        /// Creates a new vector from the provided data.
         impl $vec_name {
             pub fn from_vec(vec: Vec<$item_type>) -> Self {
                 Self { data: vec }
@@ -273,7 +270,6 @@ macro_rules! impl_builder_vec {
             pub data: Vec<Option<$item_type>>,
         }
 
-        /// Creates a new optional vector from the provided data.
         impl $opt_vec_name {
             pub fn from_vec(vec: Vec<Option<$item_type>>) -> Self {
                 Self { data: vec }
@@ -329,15 +325,20 @@ impl_builder_vec!(
     BinaryBuilder
 );
 
-// ========== Decimal128 类型 ==========
+// ========== Decimal128 Vector ==========
 
 /// A vector for storing Decimal128 values with precision and scale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Decimal128Value {
+    pub value: i128,
+    pub precision: u8,
+    pub scale: i8,
+}
 pub struct Decimal128Vec {
     pub data: Vec<Decimal128Value>,
 }
 
 impl Decimal128Vec {
-    /// Creates a new Decimal128Vec from a vector of Decimal128Value.
     pub fn from_vec(vec: Vec<Decimal128Value>) -> Self {
         Self { data: vec }
     }
@@ -387,7 +388,6 @@ pub struct Decimal128OptVec {
 }
 
 impl Decimal128OptVec {
-    /// Creates a new Decimal128OptVec from a vector of optional Decimal128Value.
     pub fn from_vec(vec: Vec<Option<Decimal128Value>>) -> Self {
         Self { data: vec }
     }
@@ -413,7 +413,6 @@ impl NativeArray for Decimal128OptVec {
                 .unwrap();
         }
         
-        // Find the first non-None value to get precision and scale
         let (precision, scale) = self.data.iter()
             .find_map(|opt| opt.as_ref().map(|d| (d.precision, d.scale)))
             .unwrap_or((10, 0));

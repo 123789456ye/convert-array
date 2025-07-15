@@ -1,4 +1,4 @@
-use crate::array::time_array::*;
+use crate::array::{primitive_array::Decimal128Value, time_array::*};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -43,7 +43,6 @@ pub enum DynScalar {
     List(Vec<DynScalar>),
     Struct(HashMap<String, DynScalar>),
     Map(Vec<(DynScalar, DynScalar)>), 
-    Dictionary(Box<DynScalar>, Box<DynScalar>), 
     FixedSizeList(Vec<DynScalar>, i32),
     
     // Optional variants for all types
@@ -84,7 +83,6 @@ pub enum DynScalar {
     OptionalList(Option<Vec<DynScalar>>),
     OptionalStruct(Option<HashMap<String, DynScalar>>),
     OptionalMap(Option<Vec<(DynScalar, DynScalar)>>),
-    OptionalDictionary(Option<Box<DynScalar>>, Option<Box<DynScalar>>),
     OptionalFixedSizeList(Option<Vec<DynScalar>>, i32),
 }
 

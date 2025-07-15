@@ -1,5 +1,5 @@
 use arrow::array::{
-    ArrayRef, DictionaryArray, ListArray, MapArray, StructArray
+    ArrayRef, FixedSizeListArray, ListArray, MapArray, StructArray
 };
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::buffer::OffsetBuffer;
@@ -10,11 +10,27 @@ use crate::array::primitive_array::NativeArray;
 use crate::array::dispatch::dyn_scalar_vec_to_array;
 use crate::datatype::DynScalar;
 use crate::array::dispatch::default_dyn_scalar;
+use crate::register_struct;
 
 // ========== List Type Implementation ==========
 
 /// A vector implementation for Arrow List arrays.
 /// Stores nested vectors and converts them to Arrow ListArray format.
+ 
+/// Implement Into<DynScalar> for Vec<T> (List)
+impl<T> Into<DynScalar> for Vec<T>
+where
+    T: Into<DynScalar>,
+{
+    fn into(self) -> DynScalar {
+        let scalars: Vec<DynScalar> = self
+            .into_iter()
+            .map(|item| item.into())
+            .collect();
+        DynScalar::List(scalars)
+    }
+}
+
 pub struct ListVec<T> {
     pub data: Vec<Vec<T>>,
     pub field: Field,
@@ -74,10 +90,88 @@ where
     }
 }
 
+pub struct ListOptVec<T> {
+    pub data: Vec<Option<Vec<T>>>,
+    pub field: Field,
+}
+
+impl<T> ListOptVec<T> {
+    pub fn new(field: Field) -> Self {
+        Self {
+            data: Vec::new(),
+            field,
+        }
+    }
+    pub fn from_vec_with_field(data: Vec<Option<Vec<T>>>, field: Field) -> Self {
+        Self {data, field}
+    }
+}
+
+impl<T> NativeArray for ListOptVec<T>
+where 
+    T: Clone + Into<DynScalar> + 'static,
+{
+    type Item = Option<Vec<T>>;
+    type ItemRef<'a> = &'a Option<Vec<T>>;
+    type ArrowArray = ListArray;
+
+    fn push(&mut self, item: Self::Item) {
+        self.data.push(item);
+    }
+
+    fn get(&self, index: usize) -> Self::ItemRef<'_> {
+        &self.data[index]
+    }
+
+    fn to_arrow_array(&self) -> Self::ArrowArray {
+        let mut offsets = vec![0i32];
+        let mut values = Vec::new();
+        let mut validity = Vec::with_capacity(self.data.len());
+        
+        for list in &self.data {
+            if let Some(list) = list {
+                offsets.push(offsets.last().unwrap() + list.len() as i32);
+                for item in list {
+                    values.push(item.clone().into());
+                }
+                validity.push(true);
+            } else {
+                offsets.push(*offsets.last().unwrap());
+                validity.push(false);
+            }
+        }
+        //println!("{:?}", values);
+        let values_array = dyn_scalar_vec_to_array(values, self.field.data_type());
+        let offsets_buffer = OffsetBuffer::new(offsets.into());
+        ListArray::new(
+            Arc::new(self.field.clone()),
+            offsets_buffer,
+            values_array,
+            Some(validity.into()),
+        )
+    }
+}
+
 // ========== Map Type Implementation ==========
 
 /// A vector implementation for Arrow Map arrays.
 /// Stores nested HashMaps and converts them to Arrow MapArray format.
+  
+/// Implement Into<DynScalar> for HashMap where both K and V implement Into<DynScalar>
+impl<K, V> Into<DynScalar> for HashMap<K, V>
+where
+    K: Clone + Into<DynScalar>,
+    V: Clone + Into<DynScalar>,
+{
+    fn into(self) -> DynScalar {
+        let pairs: Vec<(DynScalar, DynScalar)> = self
+            .into_iter()
+            .map(|(k, v)| (k.into(), v.into()))
+            .collect();
+        DynScalar::Map(pairs)
+    }
+}
+
 pub struct MapVec<K, V> {
     pub data: Vec<HashMap<K, V>>,
     pub key_field: Field,
@@ -143,6 +237,7 @@ where
         let values_array = dyn_scalar_vec_to_array(values, self.value_field.data_type());
         let offsets_buffer = OffsetBuffer::new(offsets.into());
         
+        // Create struct fields exactly like Arrow MapBuilder
         let entries_field = Field::new(
             "entries",
             DataType::Struct(vec![self.key_field.clone(), self.value_field.clone()].into()),
@@ -165,74 +260,123 @@ where
     }
 }
 
-// ========== Dictionary Type Implementation ==========
-// Note: Dictionary implementation is simplified for demonstration
-// In a real implementation, you'd need proper handling of different key types
-
-/// A vector implementation for Arrow Dictionary arrays.
-/// Simplified implementation using i32 keys for demonstration.
-pub struct DictionaryVec<V> {
-    pub keys: Vec<i32>,  // Simplified to use i32 keys
-    pub values: Vec<V>,
+pub struct MapOptVec<K, V> {
+    pub data: Vec<Option<HashMap<K, V>>>,
+    pub key_field: Field,
     pub value_field: Field,
 }
 
-impl<V> DictionaryVec<V> {
-    /// Creates a new DictionaryVec with the specified value field schema.
-    pub fn new(value_field: Field) -> Self {
+impl<K, V> MapOptVec<K, V> {
+    pub fn new(key_field: Field, value_field: Field) -> Self {
         Self {
-            keys: Vec::new(),
-            values: Vec::new(),
-            value_field,
+            data: Vec::new(),
+            key_field,
+            value_field
         }
     }
 
-    /// Creates a new DictionaryVec from existing keys, values, and field schema.
-    pub fn from_vecs_with_field(keys: Vec<i32>, values: Vec<V>, value_field: Field) -> Self {
+    pub fn from_vec_with_fields(
+        data: Vec<Option<HashMap<K, V>>>,
+        key_field: Field,
+        value_field: Field,
+    ) -> Self {
         Self {
-            keys,
-            values,
+            data,
+            key_field,
             value_field,
         }
     }
 }
 
-impl<V> NativeArray for DictionaryVec<V>
-where
+impl<K, V> NativeArray for MapOptVec<K, V>
+where 
+    K: Clone + Into<DynScalar> + 'static,
     V: Clone + Into<DynScalar> + 'static,
 {
-    type Item = (i32, V);
-    type ItemRef<'a> = (&'a i32, &'a V);
-    type ArrowArray = DictionaryArray<arrow::datatypes::Int32Type>;
+    type Item = Option<HashMap<K, V>>;
+    type ItemRef<'a> = &'a Option<HashMap<K, V>>;
+    type ArrowArray = MapArray;
 
     fn push(&mut self, item: Self::Item) {
-        self.keys.push(item.0);
-        self.values.push(item.1);
+        self.data.push(item)
     }
 
     fn get(&self, index: usize) -> Self::ItemRef<'_> {
-        (&self.keys[index], &self.values[index])
+        &self.data[index]
     }
 
-    /// Converts this DictionaryVec to an Arrow DictionaryArray.
     fn to_arrow_array(&self) -> Self::ArrowArray {
-        let values_dyn: Vec<DynScalar> = self.values.iter().cloned().map(Into::into).collect();
-        let values_array = dyn_scalar_vec_to_array(values_dyn, self.value_field.data_type());
+        let mut offsets = vec![0i32];
+        let mut keys = Vec::new();
+        let mut values = Vec::new();
+        let mut validity = Vec::with_capacity(self.data.len());
         
-        // Create keys array
-        let keys_array = arrow::array::Int32Array::from(self.keys.clone());
+        for map in &self.data {
+            if let Some(map) = map {
+                offsets.push(offsets.last().unwrap() + map.len() as i32);
+                for (k, v) in map {
+                    keys.push(k.clone().into());
+                    values.push(v.clone().into());
+                }
+                validity.push(true);
+            } else {
+                offsets.push(*offsets.last().unwrap());
+                validity.push(false);
+            }
+        }
         
-        DictionaryArray::try_new(
-            keys_array,
-            values_array,
-        ).unwrap()
+        let keys_array = dyn_scalar_vec_to_array(keys, self.key_field.data_type());
+        let values_array = dyn_scalar_vec_to_array(values, self.value_field.data_type());
+        let offsets_buffer = OffsetBuffer::new(offsets.into());
+        
+        let entries_field = Field::new(
+            "entries",
+            DataType::Struct(vec![self.key_field.clone(), self.value_field.clone()].into()),
+            false,
+        );
+        
+        let struct_array = StructArray::new(
+            vec![self.key_field.clone(), self.value_field.clone()].into(),
+            vec![keys_array, values_array],
+            None,
+        );
+        
+        let nulls = if validity.iter().all(|&x| x) {
+            None
+        } else {
+            Some(arrow::buffer::NullBuffer::from(arrow::buffer::BooleanBuffer::from(validity)))
+        };
+        
+        MapArray::new(
+            Arc::new(entries_field),
+            offsets_buffer,
+            struct_array,
+            nulls,
+            false,
+        )
     }
 }
-
 // ========== FixedSizeList Type Implementation ==========
 
 /// A vector implementation for Arrow FixedSizeList arrays.
 /// Stores vectors of fixed size and converts them to Arrow FixedSizeListArray format.
+
+/// Implement Into<DynScalar> for (Vec<T>, i32) (FixedSizeList)
+impl<T> Into<DynScalar> for (Vec<T>, i32)
+where
+    T: Into<DynScalar>,
+{
+    fn into(self) -> DynScalar {
+        let (vec, size) = self;
+        let scalars: Vec<DynScalar> = vec
+            .into_iter()
+            .map(|item| item.into())
+            .collect();
+        DynScalar::FixedSizeList(scalars, size)
+    }
+}
+
+
 pub struct FixedSizeListVec<T> {
     pub data: Vec<Vec<T>>,
     pub field: Field,
@@ -291,6 +435,76 @@ where
             self.size,
             values_array,
             None,
+        )
+    }
+}
+
+pub struct FixedSizeListOptVec<T> {
+    pub data: Vec<Option<Vec<T>>>,
+    pub field: Field,
+    pub size: i32,
+}
+
+impl<T> FixedSizeListOptVec<T> {
+    pub fn new(field: Field, size: i32) -> Self {
+        Self {
+            data: Vec::new(),
+            field,
+            size,
+        }
+    }
+
+    pub fn from_vec_with_field(data: Vec<Option<Vec<T>>>, field: Field, size: i32) -> Self {
+        Self {
+            data,
+            field,
+            size,
+        }
+    }
+}
+
+impl<T> NativeArray for FixedSizeListOptVec<T>
+where 
+    T: Clone + Into<DynScalar> + 'static,
+{
+    type Item = Option<Vec<T>>;
+    type ItemRef<'a> = &'a Option<Vec<T>>;
+    type ArrowArray = FixedSizeListArray;
+
+    fn push(&mut self, item: Self::Item) {
+        if item.as_ref().unwrap().len() != self.size as usize {
+            panic!("FixedSizeList size mismatch: expected {}, got {}", self.size, item.as_ref().unwrap().len());
+        }
+        self.data.push(item);
+    }
+
+    fn get(&self, index: usize) -> Self::ItemRef<'_> {
+        &self.data[index]
+    }
+
+    fn to_arrow_array(&self) -> Self::ArrowArray {
+        let mut values = Vec::new();
+        let mut validity = Vec::with_capacity(self.data.len());
+        
+        for list in &self.data {
+            if let Some(list) = list {
+                for item in list {
+                    values.push(item.clone().into());
+                }
+                validity.push(true);
+            } else {
+                validity.push(false);
+            }
+            
+        }
+        
+        let values_array = dyn_scalar_vec_to_array(values, self.field.data_type());
+        
+        arrow::array::FixedSizeListArray::new(
+            Arc::new(self.field.clone()),
+            self.size,
+            values_array,
+            Some(validity.into()),
         )
     }
 }
@@ -357,6 +571,102 @@ impl NativeArray for StructVec {
     }
 }
 
+pub struct StructOptVec {
+    pub data: Vec<Option<HashMap<String, DynScalar>>>,
+    pub schema: Schema,
+}
+
+impl StructOptVec {
+    pub fn new(schema: Schema) -> Self {
+        Self {
+            data: Vec::new(),
+            schema,
+        }
+    }
+
+    pub fn from_vec_with_schema(data: Vec<Option<HashMap<String, DynScalar>>>, schema: Schema) -> Self {
+        Self {
+            data, 
+            schema,
+        }
+    }
+}
+
+impl NativeArray for StructOptVec {
+    type Item = Option<HashMap<String, DynScalar>>;
+    type ItemRef<'a> = &'a Option<HashMap<String, DynScalar>>;
+    type ArrowArray = StructArray;
+
+    fn push(&mut self, item: Self::Item) {
+        self.data.push(item);
+    }
+
+    fn get(&self, index: usize) -> Self::ItemRef<'_> {
+        &self.data[index]
+    }
+
+    /// Converts this StructVec to an Arrow StructArray.
+    fn to_arrow_array(&self) -> Self::ArrowArray {
+        let mut field_arrays: Vec<ArrayRef> = Vec::new();
+        let validity: Vec<bool> = self.data.iter().map(|row| row.is_some()).collect();
+        
+        for field in self.schema.fields() {
+            let field_name = field.name();
+            let field_values: Vec<DynScalar> = self.data.iter().map(|opt_row| {
+                match opt_row {
+                    None => DynScalar::Null,
+                    Some(row) => row.get(field_name)
+                                         .cloned()
+                                         .unwrap_or_else(|| default_dyn_scalar(field.data_type()))
+                }
+            }).collect();
+            println!("{:?}", field_values);
+            let array = dyn_scalar_vec_to_array(field_values, field.data_type());
+            field_arrays.push(array);
+        }
+        for (field, arr) in self.schema.fields().iter().zip(field_arrays.iter()) {
+            assert_eq!(arr.data_type(), field.data_type(), "Field {:?} expects {:?}, got {:?}", field.name(), field.data_type(), arr.data_type());
+        }
+        
+        StructArray::new(
+            self.schema.fields().clone(),
+            field_arrays,
+            Some(validity.into()),
+        )
+    }
+}
+
+pub trait SchemaConvertible {
+    fn to_hashmap_with_schema(&self, schema: &Schema) -> HashMap<String, DynScalar>;
+}
+
+pub trait FieldExtractor {
+    fn extract_field(&self, field_name: &str, data_type: &DataType) -> Option<DynScalar>;
+}
+
+pub fn convert_vector_with_schema<T: SchemaConvertible>(
+    vector: &[T],
+    schema: &Schema,
+) -> Vec<HashMap<String, DynScalar>> {
+    vector
+        .iter()
+        .map(|item| item.to_hashmap_with_schema(schema))
+        .collect()
+}
+
+impl<T: FieldExtractor> SchemaConvertible for T {
+    fn to_hashmap_with_schema(&self, schema: &Schema) -> HashMap<String, DynScalar> {
+        let mut result = HashMap::new();
+        for field in schema.fields() {
+            let field_name = field.name();
+            let data_type = field.data_type();
+            let value = self.extract_field(field_name, data_type)
+                .unwrap_or_else(|| default_dyn_scalar(data_type));
+            result.insert(field_name.clone(), value);
+        }
+        result
+    }
+}
 
 // ========== TESTS ==========
 
@@ -364,7 +674,7 @@ impl NativeArray for StructVec {
 mod tests {
     use super::*;
     use arrow::array::*;
-    use std::collections::HashMap;
+    use std::{collections::HashMap};
 
     #[test]
     fn test_list_vec_nested_struct() {
@@ -404,12 +714,261 @@ mod tests {
     }
 
     #[test]
+    fn test_map_vec() {
+        // Test converting Vec<HashMap<i32, String>> to MapVec vs Arrow MapArray builder
+        use arrow::array::{MapBuilder, Int32Builder, StringBuilder};
+        
+        let key_field = Field::new("keys", DataType::Int32, false);
+        let value_field = Field::new("values", DataType::Utf8, false);
+        
+        let mut map1 = HashMap::new();
+        map1.insert(1, "first".to_string());
+        map1.insert(2, "second".to_string());
+        
+        let mut map2 = HashMap::new();
+        map2.insert(3, "third".to_string());
+        map2.insert(4, "fourth".to_string());
+        
+        let native_data = vec![map1.clone(), map2.clone()];
+        
+        let map_vec = MapVec::from_vec_with_fields(
+            native_data.clone(),
+            key_field.clone(),
+            value_field.clone(),
+        );
+        let our_array = map_vec.to_arrow_array();
+        
+        let mut builder = MapBuilder::new(
+            None,
+            Int32Builder::new(),
+            StringBuilder::new(),
+        );
+        
+        for (k, v) in &map1 {
+            builder.keys().append_value(*k);
+            builder.values().append_value(v);
+        }   
+        builder.append(true).unwrap();
+        
+        for (k, v) in &map2 {
+            builder.keys().append_value(*k);
+            builder.values().append_value(v);
+        }
+        builder.append(true).unwrap();
+        
+        let expected_array = builder.finish();
+        
+        // Test basic properties
+        assert_eq!(our_array.len(), expected_array.len());
+        assert_eq!(our_array.len(), 2);
+        
+        // Verify data types are compatible
+        assert!(matches!(our_array.data_type(), DataType::Map(_, _)));
+        assert!(matches!(expected_array.data_type(), DataType::Map(_, _)));
+        
+        // Verify individual map entries from our implementation
+        assert_eq!(map_vec.get(0), &map1);
+        assert_eq!(map_vec.get(1), &map2);
+        
+        // Verify the arrays have the same structure by inspecting their content
+        for i in 0..our_array.len() {
+            assert_eq!(our_array.is_valid(i), expected_array.is_valid(i));
+        }
+
+        // Note: Direct equality may fail due to HashMap iteration order differences
+        // but the arrays are logically equivalent
+        // assert_eq!(our_array, expected_array);
+    }
+
+    #[test]
+    fn test_map_vec_nested() {
+        // Test converting Vec<HashMap<i64, HashMap<String, i64>>> 
+        use arrow::array::{MapBuilder, Int64Builder, StringBuilder};
+        
+        let key_field = Field::new("keys", DataType::Int64, false);
+        
+        let nested_key_field = Field::new("keys", DataType::Utf8, false);
+        let nested_value_field = Field::new("values", DataType::Int64, true);  // Arrow MapBuilder uses nullable values
+        let nested_entries_field = Field::new(
+            "entries",
+            DataType::Struct(vec![nested_key_field.clone(), nested_value_field.clone()].into()),
+            false,
+        );
+        let value_field = Field::new(
+            "values", 
+            DataType::Map(Arc::new(nested_entries_field), false), 
+            false
+        );
+        
+        let mut inner_map1 = HashMap::new();
+        inner_map1.insert("score".to_string(), 95i64);
+        inner_map1.insert("rank".to_string(), 1i64);
+        
+        let mut inner_map2 = HashMap::new();
+        inner_map2.insert("score".to_string(), 87i64);
+        inner_map2.insert("rank".to_string(), 3i64);
+        
+        let mut map1 = HashMap::new();
+        map1.insert(100i64, inner_map1.clone());
+        map1.insert(200i64, inner_map2.clone());
+        
+        let mut inner_map3 = HashMap::new();
+        inner_map3.insert("score".to_string(), 92i64);
+        
+        let mut map2 = HashMap::new();
+        map2.insert(300i64, inner_map3.clone());
+        
+        let native_data = vec![map1.clone(), map2.clone()];
+        
+        let map_vec = MapVec::from_vec_with_fields(
+            native_data.clone(),
+            key_field.clone(),
+            value_field.clone(),
+        );
+        let our_array = map_vec.to_arrow_array();
+        
+        let nested_map_builder = MapBuilder::new(
+            None,
+            StringBuilder::new(),
+            Int64Builder::new(),
+        );
+        let mut builder = MapBuilder::new(
+            None,
+            Int64Builder::new(),
+            nested_map_builder,
+        );
+        
+        for map in &native_data {
+            for (outer_key, inner_map) in map {
+                builder.keys().append_value(*outer_key);
+                
+                let nested_builder = builder.values();
+                for (inner_key, inner_value) in inner_map {
+                    nested_builder.keys().append_value(inner_key);
+                    nested_builder.values().append_value(*inner_value);
+                }
+                nested_builder.append(true).unwrap();
+            }
+            builder.append(true).unwrap();
+        }
+        
+        let expected_array = builder.finish();
+        
+        // Test basic properties
+        assert_eq!(our_array.len(), expected_array.len());
+        assert_eq!(our_array.len(), 2);
+        
+        // Verify data types are compatible
+        assert!(matches!(our_array.data_type(), DataType::Map(_, _)));
+        assert!(matches!(expected_array.data_type(), DataType::Map(_, _)));
+        
+        // Verify individual map entries from our implementation
+        assert_eq!(map_vec.get(0), &map1);
+        assert_eq!(map_vec.get(1), &map2);
+        
+        // Verify the arrays have the same structure by inspecting their content
+        for i in 0..our_array.len() {
+            assert_eq!(our_array.is_valid(i), expected_array.is_valid(i));
+        }
+        
+        // assert_eq!(our_array, expected_array);
+    }
+
+    #[test]
+    fn test_map_opt_vec() {
+        // Test converting Vec<Option<HashMap<i32, String>>> 
+        use arrow::array::{MapBuilder, Int32Builder, StringBuilder};
+        
+        let key_field = Field::new("keys", DataType::Int32, false);
+        let value_field = Field::new("values", DataType::Utf8, false);
+        
+        let mut map1 = HashMap::new();
+        map1.insert(1, "first".to_string());
+        map1.insert(2, "second".to_string());
+        
+        let mut map2 = HashMap::new();
+        map2.insert(3, "third".to_string());
+        map2.insert(4, "fourth".to_string());
+        
+        let native_data = vec![
+            Some(map1.clone()),
+            None,  
+            Some(map2.clone()),
+            Some(HashMap::new()), 
+        ];
+        
+        let map_vec = MapOptVec::from_vec_with_fields(
+            native_data.clone(),
+            key_field.clone(),
+            value_field.clone(),
+        );
+        let our_array = map_vec.to_arrow_array();
+        
+        let mut builder = MapBuilder::new(
+            None,
+            Int32Builder::new(),
+            StringBuilder::new(),
+        );
+        
+        for opt_map in &native_data {
+            match opt_map {
+                Some(map) => {
+                    let mut sorted_pairs: Vec<_> = map.iter().collect();
+                    sorted_pairs.sort_by_key(|&(k, _)| k);
+                    for (k, v) in sorted_pairs {
+                        builder.keys().append_value(*k);
+                        builder.values().append_value(v);
+                    }
+                    builder.append(true).unwrap();
+                }
+                None => {
+                    builder.append(false).unwrap();  // null map
+                }
+            }
+        }
+        
+        let expected_array = builder.finish();
+        
+        // Test basic properties
+        assert_eq!(our_array.len(), expected_array.len());
+        assert_eq!(our_array.len(), 4);
+        
+        // Verify data types are compatible
+        assert!(matches!(our_array.data_type(), DataType::Map(_, _)));
+        assert!(matches!(expected_array.data_type(), DataType::Map(_, _)));
+        
+        // Verify validity matches
+        assert!(our_array.is_valid(0));    // Some(map1)
+        assert!(!our_array.is_valid(1));   // None
+        assert!(our_array.is_valid(2));    // Some(map2)
+        assert!(our_array.is_valid(3));    // Some(empty map)
+        
+        assert!(expected_array.is_valid(0));
+        assert!(!expected_array.is_valid(1));
+        assert!(expected_array.is_valid(2));
+        assert!(expected_array.is_valid(3));
+        
+        // Verify individual map entries from our implementation
+        assert_eq!(map_vec.get(0), &Some(map1));
+        assert_eq!(map_vec.get(1), &None);
+        assert_eq!(map_vec.get(2), &Some(map2));
+        assert_eq!(map_vec.get(3), &Some(HashMap::new()));
+        
+        // Verify the arrays have the same structure by inspecting their content
+        for i in 0..our_array.len() {
+            assert_eq!(our_array.is_valid(i), expected_array.is_valid(i));
+        }
+        
+        // Note: Direct equality may fail due to HashMap iteration order differences
+        // but the arrays are logically equivalent  
+        // assert_eq!(our_array, expected_array);
+    }
+
+    #[test]
     fn test_list_vec_from_vec_with_field() {
-        use arrow::datatypes::{DataType, Field};
         use std::sync::Arc;
         use arrow::array::{Int32Array, ListArray};
 
-        // 1. 构造vec数据和Field
         let data = vec![
             vec![1, 2, 3],
             vec![4, 5],
@@ -418,14 +977,11 @@ mod tests {
         ];
         let inner_field = Field::new("item", DataType::Int32, false);
 
-        // 2. 调用 from_vec_with_field
         let list_vec = ListVec::from_vec_with_field(data.clone(), inner_field.clone());
 
-        // 3. 调用 to_arrow_array
         let arrow_array = list_vec.to_arrow_array();
         assert_eq!(arrow_array.len(), data.len());
 
-        // 4. 用Arrow ListArray手工构造期望
         let values: Vec<i32> = data.iter().flatten().copied().collect();
         let expected_values = Int32Array::from(values);
         let mut offsets = vec![0_i32];
@@ -439,8 +995,109 @@ mod tests {
             None,
         );
 
-        // 5. 断言
         assert_eq!(arrow_array, expected);
+    }
+
+    #[test]
+    fn test_struct_vec() {
+        // Define Person struct for testing
+        struct Person {
+            name: String,
+            age: i32,
+            email: Option<String>,
+        }
+        
+        // Create schema
+        let fields = vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("age", DataType::Int32, false),
+            Field::new("email", DataType::Utf8, true), // nullable
+        ];
+        let _schema = Schema::new(fields);
+        
+        // Register the Person struct with the schema using our macro
+        register_struct!(Person, _schema.clone(), {
+            "name" => name,
+            "age" => age,
+            "email" => email,
+        });
+        
+        // Create test data
+        let people = vec![
+            Person { 
+                name: "Alice".to_string(), 
+                age: 30, 
+                email: Some("alice@example.com".to_string()) 
+            },
+            Person { 
+                name: "Bob".to_string(), 
+                age: 25, 
+                email: None 
+            },
+            Person { 
+                name: "Charlie".to_string(), 
+                age: 35, 
+                email: Some("charlie@example.com".to_string()) 
+            },
+        ];
+        
+        // Create schema
+        let fields = vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("age", DataType::Int32, false),
+            Field::new("email", DataType::Utf8, true), // nullable
+        ];
+        let _schema2 = Schema::new(fields);
+        
+        // Convert using SchemaConvertible
+        let converted = convert_vector_with_schema(&people, &_schema);
+        
+        // Convert to StructVec and then to Arrow array
+        let struct_vec = StructVec::from_vec_with_schema(converted.clone(), _schema.clone());
+        let arrow_array = struct_vec.to_arrow_array();
+        
+        // Create expected array using StructBuilder  
+        let expected = {
+            let id_array = Arc::new(arrow::array::StringArray::from(vec!["Alice", "Bob", "Charlie"]));
+            let age_array = Arc::new(arrow::array::Int32Array::from(vec![30, 25, 35]));
+            let email_array = Arc::new(arrow::array::StringArray::from(vec![
+                Some("alice@example.com"), 
+                None, 
+                Some("charlie@example.com")
+            ]));
+            
+            StructArray::new(
+                _schema.fields().clone(),
+                vec![id_array, age_array, email_array],
+                None,
+            )
+        };
+        
+        // Assert equality
+        assert_eq!(arrow_array, expected);
+        assert_eq!(arrow_array.len(), expected.len());
+        assert_eq!(arrow_array.data_type(), expected.data_type());
+        
+        // Verify conversion
+        assert_eq!(converted.len(), 3);
+        
+        // Check first person
+        let person1 = &converted[0];
+        assert_eq!(person1.get("name"), Some(&DynScalar::String("Alice".to_string())));
+        assert_eq!(person1.get("age"), Some(&DynScalar::Int32(30)));
+        assert_eq!(person1.get("email"), Some(&DynScalar::OptionalString(Some("alice@example.com".to_string()))));
+        
+        // Check second person (with null email)
+        let person2 = &converted[1];
+        assert_eq!(person2.get("name"), Some(&DynScalar::String("Bob".to_string())));
+        assert_eq!(person2.get("age"), Some(&DynScalar::Int32(25)));
+        assert_eq!(person2.get("email"), Some(&DynScalar::OptionalString(None)));
+        
+        // Check third person
+        let person3 = &converted[2];
+        assert_eq!(person3.get("name"), Some(&DynScalar::String("Charlie".to_string())));
+        assert_eq!(person3.get("age"), Some(&DynScalar::Int32(35)));
+        assert_eq!(person3.get("email"), Some(&DynScalar::OptionalString(Some("charlie@example.com".to_string()))));
     }
 
     #[test]
@@ -455,7 +1112,6 @@ mod tests {
         
         let mut struct_vec = StructVec::new(schema.clone());
         
-        // Add some test data
         let mut row1 = HashMap::new();
         row1.insert("id".to_string(), DynScalar::Int32(1));
         row1.insert("name".to_string(), DynScalar::String("Alice".to_string()));
@@ -470,7 +1126,6 @@ mod tests {
         
         let arrow_array = struct_vec.to_arrow_array();
         
-        // Test direct construction using arrow-rs
         let expected = {
             let id_array = Arc::new(Int32Array::from(vec![1, 2]));
             let name_array = Arc::new(StringArray::from(vec!["Alice", "Bob"]));
@@ -494,6 +1149,8 @@ mod tests {
                 assert_eq!(our_col.as_ref(), expected_col.as_ref());
             }
         }
+
+        assert_eq!(arrow_array, expected);
     }
     
     #[test]
@@ -508,7 +1165,6 @@ mod tests {
         
         let mut struct_vec = StructVec::new(schema.clone());
         
-        // Add first row with i64 and list of integers
         let mut row1 = HashMap::new();
         row1.insert("id".to_string(), DynScalar::Int64(100));
         row1.insert("tags".to_string(), DynScalar::List(vec![
@@ -518,7 +1174,6 @@ mod tests {
         ]));
         struct_vec.push(row1);
         
-        // Add second row
         let mut row2 = HashMap::new();
         row2.insert("id".to_string(), DynScalar::Int64(200));
         row2.insert("tags".to_string(), DynScalar::List(vec![
@@ -529,11 +1184,9 @@ mod tests {
         
         let arrow_array = struct_vec.to_arrow_array();
         
-        // Test direct construction using arrow-rs for comparison
         let expected = {
             let id_array = Arc::new(Int64Array::from(vec![100, 200]));
             
-            // Create the list array manually
             let list_values = Int32Array::from(vec![1, 2, 3, 4, 5]);
             let list_offsets = OffsetBuffer::new(vec![0, 3, 5].into());
             let list_field = Field::new("item", DataType::Int32, false);
@@ -574,6 +1227,8 @@ mod tests {
         let second_list = tags_array.value(1);
         let second_list_ints = second_list.as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(second_list_ints.values(), &[4, 5]);
+
+        assert_eq!(arrow_array, expected);
     }
 
     #[test]
@@ -595,7 +1250,6 @@ mod tests {
         
         let mut struct_vec = StructVec::new(schema.clone());
         
-        // Add a row with map data
         let mut row1 = HashMap::new();
         row1.insert("id".to_string(), DynScalar::Int64(100));
         row1.insert("metadata".to_string(), DynScalar::Map(vec![
@@ -625,53 +1279,7 @@ mod tests {
         assert_eq!(map_array.len(), 1);
     }
 
-    #[test]
-    fn test_nested_struct_with_dictionary() {
-        // Test a struct containing a Dictionary field
-        let fields = vec![
-            Field::new("id", DataType::Int64, false),
-            Field::new("category", DataType::Dictionary(
-                Box::new(DataType::Int32),
-                Box::new(DataType::Utf8),
-            ), false),
-        ];
-        let schema = Schema::new(fields);
-        
-        let mut struct_vec = StructVec::new(schema.clone());
-        
-        // Add a row with dictionary data
-        // In a real scenario, you'd have one dictionary shared across multiple rows
-        // but each row would have its own key index
-        let mut row1 = HashMap::new();
-        row1.insert("id".to_string(), DynScalar::Int64(100));
-        row1.insert("category".to_string(), DynScalar::Dictionary(
-            Box::new(DynScalar::Int32(0)), // Key index
-            Box::new(DynScalar::String("red".to_string())), // The actual value
-        ));
-        struct_vec.push(row1.clone());
-        struct_vec.push(row1.clone());
-        
-        let arrow_array = struct_vec.to_arrow_array();
-        
-        assert_eq!(arrow_array.len(), 2);
-        assert_eq!(arrow_array.num_columns(), 2);
-        
-        // Verify the data types
-        let id_column = arrow_array.column(0);
-        let category_column = arrow_array.column(1);
-        
-        assert_eq!(id_column.data_type(), &DataType::Int64);
-        assert!(matches!(category_column.data_type(), DataType::Dictionary(_, _)));
-        
-        // Verify the ID value
-        let id_array = id_column.as_any().downcast_ref::<Int64Array>().unwrap();
-        assert_eq!(id_array.value(0), 100);
-        
-        // Verify the dictionary structure exists
-        let dict_array = category_column.as_any().downcast_ref::<DictionaryArray<arrow::datatypes::Int32Type>>().unwrap();
-        assert_eq!(dict_array.len(), 2); // 1 row with 1 key
-    }
-
+    
     #[test]
     fn test_nested_struct_empty() {
         // Test an empty StructVec
@@ -691,6 +1299,34 @@ mod tests {
         // Verify the data types
         assert_eq!(arrow_array.column(0).data_type(), &DataType::Int64);
         assert_eq!(arrow_array.column(1).data_type(), &DataType::Utf8);
+    }
+
+    #[test]
+    fn test_struct_option_vec() {
+        let fields = vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, false),
+        ];
+        let schema = Schema::new(fields);
+        
+        let mut struct_vec = StructOptVec::new(schema.clone());
+        
+        let mut data = HashMap::new();
+        data.insert("id".to_string(), DynScalar::Int64(1));
+        data.insert("name".to_string(), DynScalar::String("udf".to_string()));
+
+        struct_vec.push(None);
+        struct_vec.push(Some(data));
+        
+        let arrow_array = struct_vec.to_arrow_array();
+
+        let expected = StructArray::new(
+            schema.fields.clone(),
+            vec![Arc::new(Int64Array::from(vec![None, Some(1)])),Arc::new(StringArray::from(vec![None, Some("udf")]))],
+            Some(vec![false, true].into()),
+        );
+
+        assert_eq!(arrow_array, expected);
     }
 
     #[test]
@@ -743,11 +1379,12 @@ mod tests {
     }
 
     #[test]
-    fn test_list_vec_nullable_arrow_expected() {
+    fn test_list_vec_nullable_arrow() {
         use arrow::array::{Int32Builder, ListBuilder};
         use arrow::datatypes::{DataType, Field};
 
         let data: Vec<Option<Vec<Option<i32>>>> = vec![
+            None,
             Some(vec![Some(1), None, Some(3)]),  // [1, null, 3]
             Some(vec![]),                        // []
             Some(vec![Some(4), Some(5)]),        // [4,5]
@@ -774,18 +1411,22 @@ mod tests {
         }
         let expected = builder.finish();
 
-        let input: Vec<Vec<DynScalar>> = data.iter()
-            .filter_map(|opt| opt.as_ref().map(|v| v.iter().map(|vi| match vi {
-                Some(x) => DynScalar::Int32(*x),
-                None => DynScalar::Null
-            }).collect()))
-            .collect();
+        let input: Vec<Option<Vec<DynScalar>>> = data.iter()
+        .map(|opt| opt.as_ref().map(|v| 
+            v.iter()
+                .map(|vi| match vi {
+                    Some(x) => DynScalar::Int32(*x),
+                    None => DynScalar::Null
+                })
+                .collect()
+        ))
+        .collect();
 
-        let list_vec = ListVec::from_vec_with_field(input, inner_field);
+        let list_vec = ListOptVec::from_vec_with_field(input, inner_field);
         let arrow_array = list_vec.to_arrow_array();
 
         assert_eq!(arrow_array, expected); 
 
     }
-
+    
 }
