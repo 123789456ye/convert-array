@@ -32,8 +32,9 @@ where
 }
 
 pub struct ListVec<T> {
-    pub data: Vec<Vec<T>>,
+    pub data: Vec<T>,
     pub field: Field,
+    pub offset: Vec<i32>,
 }
 
 impl<T> ListVec<T> {
@@ -42,12 +43,24 @@ impl<T> ListVec<T> {
         Self {
             data: Vec::new(),
             field,
+            offset: vec![0]
         }
     }
 
     /// Creates a new ListVec from existing data and field schema.
     pub fn from_vec_with_field(data: Vec<Vec<T>>, field: Field) -> Self {
-        Self { data, field }
+        let mut offset = vec![0];
+        let mut curoff = 0;
+        for list in &data {
+            curoff += list.len() as i32;
+            offset.push(curoff);
+        }
+        let flat_data = data.into_iter().flatten().collect();
+        Self {
+            data: flat_data,
+            field,
+            offset,
+        }
     }
 }
 
@@ -60,27 +73,24 @@ where
     type ArrowArray = ListArray;
 
     fn push(&mut self, item: Self::Item) {
-        self.data.push(item);
+        self.offset.push(self.offset.last().unwrap() + item.len() as i32);
+        self.data.extend(item);
     }
 
     fn get(&self, index: usize) -> Self::ItemRef<'_> {
-        &self.data[index]
+        let slice = &self.data[self.offset[index] as usize..self.offset[index + 1] as usize];
+        let vec_ref: &Vec<T> = unsafe {
+            &*(slice as *const [T] as *const Vec<T>)
+        };
+        vec_ref
     }
 
     /// Converts this ListVec to an Arrow ListArray.
     fn to_arrow_array(&self) -> Self::ArrowArray {
-        let mut offsets = vec![0i32];
-        let mut values = Vec::new();
-        
-        for list in &self.data {
-            offsets.push(offsets.last().unwrap() + list.len() as i32);
-            for item in list {
-                values.push(item.clone().into());
-            }
-        }
+        let values = self.data.iter().map(|x| x.clone().into()).collect();
         
         let values_array = dyn_scalar_vec_to_array(values, self.field.data_type());
-        let offsets_buffer = OffsetBuffer::new(offsets.into());
+        let offsets_buffer = OffsetBuffer::new(self.offset.clone().into());
         ListArray::new(
             Arc::new(self.field.clone()),
             offsets_buffer,
