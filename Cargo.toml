@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 arrow = "55.2.0"
 bit-vec = "0.8.0"
+derive-dynscalar = { path = "./derive-dynscalar" }

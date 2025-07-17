@@ -112,36 +112,3 @@ macro_rules! for_all_arraytypes {
         }
     }
 }
-
-/// Macro to register a struct type for runtime conversion
-/// 
-/// Usage:
-/// ```rust
-/// register_struct!(MyStruct, schema, {
-///     "field1" => field1,
-///     "field2" => field2,
-/// });
-/// ```
-#[macro_export]
-macro_rules! register_struct {
-    ($struct_type:ty, $schema:expr, { $($field_name:literal => $field_ident:ident),* $(,)? }) => {
-        
-        // Implement FieldExtractor for the specific struct type
-        impl crate::array::nested_array::FieldExtractor for $struct_type {
-            fn extract_field(&self, field_name: &str, data_type: &arrow::datatypes::DataType) -> Option<crate::datatype::DynScalar> {
-                use std::any::Any;
-                use crate::array::dispatch::convert_dyn_scalar;
-                
-                match field_name {
-                    $(
-                        $field_name => {
-                            let field_value = &self.$field_ident;
-                            Some(convert_dyn_scalar(field_value as &dyn Any, data_type))
-                        }
-                    )*
-                    _ => None,
-                }
-            }
-        }
-    };
-}

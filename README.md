@@ -145,7 +145,7 @@ let array_ref: ArrayRef = dyn_array.to_arrow_array(); // Returns ArrayRef (type-
 
 #### Using Dispatch
 ```rust
-use convert_array::array::dispatch::dyn_scalar_vec_to_array;
+use convert_array::array::dispatch::dynscalar_vec_to_array;
 use convert_array::datatype::DynScalar;
 use arrow::datatypes::{DataType, Field};
 
@@ -162,7 +162,7 @@ let values: Vec<DynScalar> = native_data.into_iter().map(|x| x.into()).collect()
 // Target type determined at runtime
 let inner_field = Field::new("item", DataType::Int32, false);
 let list_type = DataType::List(std::sync::Arc::new(inner_field));
-let array_ref = dyn_scalar_vec_to_array(values, &list_type); // Returns ArrayRef
+let array_ref = dynscalar_vec_to_array(values, &list_type); // Returns ArrayRef
 ```
 
 ## Conversion Routes

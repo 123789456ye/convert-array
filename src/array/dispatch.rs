@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 use std::collections::HashMap;
 
@@ -12,7 +11,7 @@ use crate::datatype::DynScalar;
 
 /// Converts a Vec<DynScalar> to an Arrow ArrayRef using Arrow builders for optimal performance.
 /// This function uses builders consistently across all data types for better efficiency.
-pub fn dyn_scalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> ArrayRef {
+pub fn dynscalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> ArrayRef {
     match data_type {
         // Primitive types using builders - handle both regular and optional variants
         DataType::Boolean => {
@@ -200,7 +199,7 @@ pub fn dyn_scalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> 
                 }
             }
             
-            let values_array = dyn_scalar_vec_to_array(list_values, field.data_type());
+            let values_array = dynscalar_vec_to_array(list_values, field.data_type());
             let offsets_buffer = OffsetBuffer::new(offsets.into());
             
             let validity = if null_mask.iter().all(|&x| x) {
@@ -237,7 +236,7 @@ pub fn dyn_scalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> 
                     })
                     .collect();
                 
-                let array = dyn_scalar_vec_to_array(field_values, field.data_type());
+                let array = dynscalar_vec_to_array(field_values, field.data_type());
                 field_arrays.push(array);
             }
             
@@ -312,8 +311,8 @@ pub fn dyn_scalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> 
                 }
             }
             
-            let keys_array = dyn_scalar_vec_to_array(keys, key_field.data_type());
-            let values_array = dyn_scalar_vec_to_array(map_values, value_field.data_type());
+            let keys_array = dynscalar_vec_to_array(keys, key_field.data_type());
+            let values_array = dynscalar_vec_to_array(map_values, value_field.data_type());
             let offsets_buffer = OffsetBuffer::new(offsets.into());
             
             let struct_array = StructArray::new(
@@ -367,7 +366,7 @@ pub fn dyn_scalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> 
                 }
             }
             
-            let values_array = dyn_scalar_vec_to_array(flat_values, field.data_type());
+            let values_array = dynscalar_vec_to_array(flat_values, field.data_type());
             
             let validity = if null_mask.iter().all(|&x| x) {
                 None
@@ -384,76 +383,6 @@ pub fn dyn_scalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> 
         }
         
         _ => panic!("Unsupported data type: {:?}", data_type),
-    }
-}
-
-/// Dispatch Any data to appropriate DynScalar type based on Arrow DataType.
-pub fn convert_dyn_scalar(data: &dyn Any, data_type: &DataType) -> DynScalar {
-    match data_type {
-        DataType::Boolean => DynScalar::Bool(*data.downcast_ref::<bool>().unwrap()),
-        DataType::Int8 => DynScalar::Int8(*data.downcast_ref::<i8>().unwrap()),
-        DataType::Int16 => DynScalar::Int16(*data.downcast_ref::<i16>().unwrap()),
-        DataType::Int32 => DynScalar::Int32(*data.downcast_ref::<i32>().unwrap()),
-        DataType::Int64 => DynScalar::Int64(*data.downcast_ref::<i64>().unwrap()),
-        DataType::UInt8 => DynScalar::UInt8(*data.downcast_ref::<u8>().unwrap()),
-        DataType::UInt16 => DynScalar::UInt16(*data.downcast_ref::<u16>().unwrap()),
-        DataType::UInt32 => DynScalar::UInt32(*data.downcast_ref::<u32>().unwrap()),
-        DataType::UInt64 => DynScalar::UInt64(*data.downcast_ref::<u64>().unwrap()),
-        DataType::Float32 => DynScalar::Float32(*data.downcast_ref::<f32>().unwrap()),
-        DataType::Float64 => DynScalar::Float64(*data.downcast_ref::<f64>().unwrap()),
-        DataType::Utf8 => {
-            // Handle both String and Option<String>
-            if let Some(s) = data.downcast_ref::<String>() {
-                DynScalar::String(s.clone())
-            } else if let Some(opt_s) = data.downcast_ref::<Option<String>>() {
-                DynScalar::OptionalString(opt_s.clone())
-            } else {
-                panic!("Failed to downcast to String or Option<String>");
-            }
-        },
-        DataType::Binary => DynScalar::Binary(data.downcast_ref::<Vec<u8>>().unwrap().clone()),
-        DataType::List(_) => DynScalar::List(data.downcast_ref::<Vec<DynScalar>>().unwrap().clone()),
-        DataType::Struct(_) => DynScalar::Struct(data.downcast_ref::<HashMap<String, DynScalar>>().unwrap().clone()),
-        DataType::Map(_, _) => DynScalar::Map(data.downcast_ref::<Vec<(DynScalar, DynScalar)>>().unwrap().clone()),
-        DataType::FixedSizeList(_, size) => DynScalar::FixedSizeList(data.downcast_ref::<Vec<DynScalar>>().unwrap().clone(), *size),
-        DataType::Timestamp(unit, _) => {
-            match unit {
-                TimeUnit::Second => DynScalar::TimestampSecond(TimestampSecond(*data.downcast_ref::<i64>().unwrap())),
-                TimeUnit::Millisecond => DynScalar::TimestampMillisecond(TimestampMillisecond(*data.downcast_ref::<i64>().unwrap())),
-                TimeUnit::Microsecond => DynScalar::TimestampMicrosecond(TimestampMicrosecond(*data.downcast_ref::<i64>().unwrap())),
-                TimeUnit::Nanosecond => DynScalar::TimestampNanosecond(TimestampNanosecond(*data.downcast_ref::<i64>().unwrap())),
-            }
-        },
-        DataType::Time32(unit) => {
-            match unit {
-                TimeUnit::Second => DynScalar::Time32Second(Time32Second(*data.downcast_ref::<i32>().unwrap())),
-                TimeUnit::Millisecond => DynScalar::Time32Millisecond(Time32Millisecond(*data.downcast_ref::<i32>().unwrap())),
-                _ => panic!("Unsupported Time32 unit: {:?}", unit),
-            }
-        },
-        DataType::Time64(unit) => {
-            match unit {
-                TimeUnit::Microsecond => DynScalar::Time64Microsecond(Time64Microsecond(*data.downcast_ref::<i64>().unwrap())),
-                TimeUnit::Nanosecond => DynScalar::Time64Nanosecond(Time64Nanosecond(*data.downcast_ref::<i64>().unwrap())),
-                _ => panic!("Unsupported Time64 unit: {:?}", unit),
-            }
-        },
-        DataType::Duration(unit) => {
-            match unit {
-                TimeUnit::Second => DynScalar::DurationSecond(DurationSecond(*data.downcast_ref::<i64>().unwrap())),
-                TimeUnit::Millisecond => DynScalar::DurationMillisecond(DurationMillisecond(*data.downcast_ref::<i64>().unwrap())),
-                TimeUnit::Microsecond => DynScalar::DurationMicrosecond(DurationMicrosecond(*data.downcast_ref::<i64>().unwrap())),
-                TimeUnit::Nanosecond => DynScalar::DurationNanosecond(DurationNanosecond(*data.downcast_ref::<i64>().unwrap())),
-            }
-        },
-        DataType::Decimal128(precision, scale) => {
-            DynScalar::Decimal128(Decimal128Value {
-                value: *data.downcast_ref::<i128>().unwrap(),
-                precision: *precision,
-                scale: *scale,
-            })
-        },
-        _ => panic!("Unsupported data type for default: {:?}", data_type),
     }
 }
 
@@ -591,7 +520,7 @@ mod tests {
             DynScalar::Null,
         ];
         let data_type = DataType::Int32;
-        let array = dyn_scalar_vec_to_array(values, &data_type);
+        let array = dynscalar_vec_to_array(values, &data_type);
         
         // Check the array contents
         let int32_array = array.as_any().downcast_ref::<arrow::array::Int32Array>().unwrap();
@@ -612,7 +541,7 @@ mod tests {
             DynScalar::Null,
         ];
         let data_type = DataType::Utf8;
-        let array = dyn_scalar_vec_to_array(values, &data_type);
+        let array = dynscalar_vec_to_array(values, &data_type);
         
         // Check the array contents
         let string_array = array.as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
@@ -633,7 +562,7 @@ mod tests {
             DynScalar::Null,
         ];
         let data_type = DataType::Boolean;
-        let array = dyn_scalar_vec_to_array(values, &data_type);
+        let array = dynscalar_vec_to_array(values, &data_type);
         
         // Check the array contents
         let bool_array = array.as_any().downcast_ref::<arrow::array::BooleanArray>().unwrap();
@@ -654,7 +583,7 @@ mod tests {
             DynScalar::Null,
         ];
         let data_type = DataType::Binary;
-        let array = dyn_scalar_vec_to_array(values, &data_type);
+        let array = dynscalar_vec_to_array(values, &data_type);
         
         // Check the array contents
         let binary_array = array.as_any().downcast_ref::<arrow::array::BinaryArray>().unwrap();
@@ -676,7 +605,7 @@ mod tests {
             DynScalar::Int32(200),
         ];
         let data_type = DataType::Int32;
-        let array = dyn_scalar_vec_to_array(values, &data_type);
+        let array = dynscalar_vec_to_array(values, &data_type);
         
         // Check the array contents
         let int32_array = array.as_any().downcast_ref::<arrow::array::Int32Array>().unwrap();
@@ -706,7 +635,7 @@ mod tests {
         ];
         let field = Arc::new(Field::new("item", DataType::Int32, true));
         let data_type = DataType::List(field);
-        let array = dyn_scalar_vec_to_array(values, &data_type);
+        let array = dynscalar_vec_to_array(values, &data_type);
         
         // Check the array contents
         let list_array = array.as_any().downcast_ref::<arrow::array::ListArray>().unwrap();
