@@ -13,7 +13,7 @@ macro_rules! for_all_primitivetype {
             (f32, Float32Type),
             (f64, Float64Type)
         }
-    }
+    };
 }
 
 #[macro_export]
@@ -31,27 +31,8 @@ macro_rules! for_all_primitivetype_with_variant {
             (f32, Float32Type, Float32),
             (f64, Float64Type, Float64)
         }
-    }
+    };
 }
-
-#[macro_export]
-macro_rules! for_all_primitivetype_with_option_variant {
-    ($macro:tt) => {
-        $macro! {
-            (i8,  Int8Type, OptionalInt8),
-            (i16, Int16Type, OptionalInt16),
-            (i32, Int32Type, OptionalInt32),
-            (i64, Int64Type, OptionalInt64),
-            (u8,  UInt8Type, OptionalUInt8),
-            (u16, UInt16Type, OptionalUInt16),
-            (u32, UInt32Type, OptionalUInt32),
-            (u64, UInt64Type, OptionalUInt64),
-            (f32, Float32Type, OptionalFloat32),
-            (f64, Float64Type, OptionalFloat64)
-        }
-    }
-}
-
 
 #[macro_export]
 macro_rules! for_all_timetypes {
@@ -70,34 +51,14 @@ macro_rules! for_all_timetypes {
             (DurationMicrosecond, DurationMicrosecondType, DurationMicrosecond, i64),
             (DurationNanosecond, DurationNanosecondType, DurationNanosecond, i64)
         }
-    }
-}
-
-#[macro_export]
-macro_rules! for_all_option_timetypes {
-    ($macro:tt) => {
-        $macro! {
-            (TimestampSecond, TimestampSecondType, OptionalTimestampSecond, i64),
-            (TimestampMillisecond, TimestampMillisecondType, OptionalTimestampMillisecond, i64),
-            (TimestampMicrosecond, TimestampMicrosecondType, OptionalTimestampMicrosecond, i64),
-            (TimestampNanosecond, TimestampNanosecondType, OptionalTimestampNanosecond, i64),
-            (Time32Second, Time32SecondType, OptionalTime32Second, i32),
-            (Time32Millisecond, Time32MillisecondType, OptionalTime32Millisecond, i32),
-            (Time64Microsecond, Time64MicrosecondType, OptionalTime64Microsecond, i64),
-            (Time64Nanosecond, Time64NanosecondType, OptionalTime64Nanosecond, i64),
-            (DurationSecond, DurationSecondType, OptionalDurationSecond, i64),
-            (DurationMillisecond, DurationMillisecondType, OptionalDurationMillisecond, i64),
-            (DurationMicrosecond, DurationMicrosecondType, OptionalDurationMicrosecond, i64),
-            (DurationNanosecond, DurationNanosecondType, OptionalDurationNanosecond, i64)
-        }
-    }
+    };
 }
 
 #[macro_export]
 macro_rules! for_all_numerictypes {
     ($macro:tt) => {
         for_all_primitivetype!($macro);
-    }
+    };
 }
 
 #[macro_export]
@@ -110,5 +71,5 @@ macro_rules! for_all_arraytypes {
             (Vec<u8>, BinaryType, Binary, Vec<u8>),
             (bool, BooleanType, Bool, bool)
         }
-    }
+    };
 }

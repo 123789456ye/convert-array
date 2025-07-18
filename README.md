@@ -37,7 +37,7 @@ The codebase is organized into several modules:
 - **FixedSizeList**: Fixed-length vectors
 
 ### Optional Types
-All types above support optional variants using `Option<T>`.
+All types above support optional variants using `Option<T>`, and should use optional generally.
 
 ## Usage Examples
 
@@ -47,46 +47,40 @@ Use `NativeArray` implementations when you know the exact Arrow type you want at
 
 #### Primitive Arrays
 ```rust
-use convert_array::array::primitive_array::{TypedVec, Int32OptVec, StringOptVec, NativeArray};
+use convert_array::array::primitive_array::{TypedVec, NativeArray};
 use arrow::datatypes::Int32Type;
 
-// Non-nullable data
-let input = vec![1i32, 2, 42];
-let typed_vec = TypedVec::<Int32Type>::from_vec(input);
-let int32_array = typed_vec.to_arrow_array(); // Returns Int32Array
-
-// Nullable data  
 let nullable_numbers = vec![Some(1i32), None, Some(3i32), Some(4i32)];
-let int_opt_vec = Int32OptVec::from(nullable_numbers);
-let int32_array_with_nulls = int_opt_vec.to_arrow_array(); // Returns Int32Array with nulls
+let int_vec = Int32Vec::from_vec(nullable_numbers);
+let int32_array_with_nulls = int_vec.to_arrow_array(); // Returns Int32Array
 
 // String data
 let nullable_strings = vec![Some("hello".to_string()), None, Some("world".to_string())];
-let string_opt_vec = StringOptVec::from(nullable_strings);
-let string_array = string_opt_vec.to_arrow_array(); // Returns StringArray with nulls
+let string_vec = StringVec::from(nullable_strings);
+let string_array = string_vec.to_arrow_array(); // Returns StringArray
 ```
 
 #### Nested Arrays
 ```rust
-use convert_array::array::nested_array::{ListVec, ListOptVec, StructVec};
+use convert_array::array::nested_array::{ListVec, StructVec};
 use arrow::datatypes::{DataType, Field, Schema};
 
 // Non-nullable lists
 let inner_field = Field::new("item", DataType::Int32, false);
 let mut list_vec = ListVec::new(inner_field);
-list_vec.push(vec![1, 2, 3]);
-list_vec.push(vec![4, 5]);
+list_vec.push(vec![Some(1), Some(2), Some(3)]);
+list_vec.push(vec![Some(4), Some(5)]);
 let list_array = list_vec.to_arrow_array(); // Returns ListArray
 
 // Nullable lists
 let nullable_lists = vec![
-    Some(vec![1i32, 2i32, 3i32]),
+    Some(vec![Some(1i32), Some(2), Some(3)]),
     None,
-    Some(vec![4i32, 5i32]),
+    Some(vec![Some(4i32), Some(5i32)]),
 ];
 let inner_field = Field::new("item", DataType::Int32, false);
-let list_opt_vec = ListOptVec::from_vec_with_field(nullable_lists, inner_field);
-let list_array_with_nulls = list_opt_vec.to_arrow_array(); // Returns ListArray with nulls
+let list_vec = ListVec::from_vec_with_field(nullable_lists, inner_field);
+let list_array_with_nulls = list_vec.to_arrow_array(); // Returns ListArray with nulls
 ```
 
 #### Struct Arrays
@@ -96,6 +90,8 @@ use convert_array::register_struct;
 use arrow::datatypes::{DataType, Field, Schema};
 
 // Define your struct
+// Use proc macro to impl Into<DynScalar> automatically
+#[derive(IntoDynScalar)]
 struct Person {
     name: String,
     age: i32,
@@ -123,9 +119,8 @@ let people = vec![
     Person { name: "Bob".to_string(), age: 25, email: None },
 ];
 
-let converted = convert_vector_with_schema(&people, &schema);
-let struct_vec = StructVec::from_vec_with_schema(converted, schema);
-let struct_array = struct_vec.to_arrow_array(); // Returns StructArray
+let converted: Vec<DynScalar> = test_data.into_iter().map(|x| x.into()).collect();
+let arrow_array = dynscalar_vec_to_array(converted.clone(), &DataType::Struct(fields.clone().into()));// Returns ArrayRef
 ```
 
 ### When Target Type is Unknown at Compile Time
@@ -138,7 +133,7 @@ use convert_array::array::dyn_array::ToDynArray;
 use arrow::array::ArrayRef;
 
 // Target type determined at runtime
-let input = vec![1i32, 2, 42];
+let input = vec![Some(1i32), Some(2), Some(42)];
 let dyn_array = input.to_dyn_array().unwrap();
 let array_ref: ArrayRef = dyn_array.to_arrow_array(); // Returns ArrayRef (type-erased)
 ```
@@ -151,9 +146,9 @@ use arrow::datatypes::{DataType, Field};
 
 // Start with native Rust types
 let native_data = vec![
-    vec![1i32, 2i32],
-    vec![3i32, 4i32],
-    vec![5i32, 6i32, 7i32],
+    vec![Some(1i32), Some(2)],
+    vec![Some(3i32), Some(4)],
+    vec![Some(5i32), Some(6), Some(7)],
 ];
 
 // Convert to Vec<DynScalar> using Into implementations
@@ -171,14 +166,12 @@ The conversion process follows two fundamental approaches based on whether the t
 
 ### Route 1: Static Type Conversion (Target Type Known at Compile Time)
 
-When you know the exact Arrow type you want, use `NativeArray` implementations:
+When you know the exact Arrow type you want, use `NativeArray` implementations(ignore Option):
 
 **Native Rust Types → NativeArray → Concrete Arrow Arrays**
 
 - `Vec<i32>` → `TypedVec<Int32Type>` → `Int32Array`
-- `Vec<Option<i32>>` → `Int32OptVec` → `Int32Array` (with nulls)
 - `Vec<Vec<i32>>` → `ListVec` → `ListArray`
-- `Vec<Option<Vec<i32>>>` → `ListOptVec` → `ListArray` (with nulls)
 - `Vec<MyStruct>` → `StructVec` → `StructArray`
 - `Vec<HashMap<K,V>>` → `MapVec` → `MapArray`
 
@@ -205,6 +198,8 @@ When the target Arrow type is determined at runtime, use dynamic conversion:
 - Runtime type flexibility
 - Unified interface for all types
 - Suitable for generic/dynamic scenarios
+
+**Special:** Though we "know" the type of Struct, we still directly convert it into DynScalar then to ArrayRef.
 
 ### Key Differences
 
