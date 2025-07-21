@@ -184,12 +184,6 @@ When you know the exact Arrow type you want, use `NativeArray` implementations(i
 
 When the target Arrow type is determined at runtime, use dynamic conversion:
 
-#### Route 2a: Via DynNativeArray
-**Native Rust Types → DynNativeArray → ArrayRef**
-
-- Any `Vec<T>` → `DynNativeArray<T>` → `ArrayRef` (type-erased)
-
-#### Route 2b: Via Dispatch
 **Native Rust Types → DynScalar → ArrayRef**
 
 - Any `Vec<T>` → `Vec<DynScalar>` → `ArrayRef` (type-erased)
@@ -199,7 +193,7 @@ When the target Arrow type is determined at runtime, use dynamic conversion:
 - Unified interface for all types
 - Suitable for generic/dynamic scenarios
 
-**Special:** Though we "know" the type of Struct, we still directly convert it into DynScalar then to ArrayRef.
+**Special for Struct Type:** Though we "know" the type of Struct, we still directly convert it into DynScalar then to ArrayRef using IntoDynScalar macro. Or we can use IntoArrow macro to directly convert it to ArrayRef.
 
 ### Key Differences
 

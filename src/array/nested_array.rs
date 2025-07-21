@@ -1,4 +1,4 @@
-use arrow::array::{ArrayRef, ListArray, MapArray, StructArray};
+use arrow::array::{Array, ArrayRef, ListArray, MapArray, StructArray};
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field, Schema};
 use std::collections::HashMap;
@@ -432,8 +432,10 @@ mod tests {
     use super::*;
     //use crate::register_struct;
     use arrow::array::*;
+    use derive::IntoArrow;
     use derive_dynscalar::IntoDynScalar;
     use std::collections::HashMap;
+    use trait_def::IntoArrow;
 
     #[test]
     fn test_list_vec_nested_struct() {
@@ -1287,5 +1289,109 @@ mod tests {
         // Due to the iterate order probably be different, the direct assert will have possibility fail (in this case 50%)
         // but still need to check seperately whether it can be passed.
         // assert_eq!(arrow_array.into_data(), struct_array.into_data());
+    }
+
+    #[test]
+    fn test_complex_struct2() {
+        #[derive(IntoArrow, Default, Clone)]
+        struct Address {
+            street: String,
+            zip: Option<i32>,
+        }
+
+        #[derive(IntoArrow)]
+        struct Person {
+            name: String,
+            age: Option<i32>,
+            address: Option<Address>,
+            tags: Vec<String>,
+            notes: Option<Vec<String>>,
+        }
+
+        let mut mask = arrow::array::builder::BooleanBufferBuilder::new(1);
+        mask.append_slice(vec![true,false].as_slice());
+
+        let persons = vec![Person {
+            name: "Alice".into(),
+            age: Some(42),
+            address: Some(Address {
+                street: "Main St".into(),
+                zip: Some(12345),
+            }),
+            tags: vec!["A".into(), "B".into()],
+            notes: Some(vec!["Note1".into(), "Note2".into()]),
+        }];
+
+        let arr = Person::into_arrow(&persons);
+
+        let expected = {
+            let mut name_builder = StringBuilder::new();
+            name_builder.append_value("Alice");
+            let mut age_builder = Int32Builder::new();
+            age_builder.append_value(42);
+
+            let mut street_builder = StringBuilder::new();
+            street_builder.append_value("Main St");
+            let mut zip_builder = Int32Builder::new();
+            zip_builder.append_option(Some(12345));
+            let address_field = vec![
+                Field::new("street", DataType::Utf8, false),
+                Field::new("zip", DataType::Int32, true),
+            ];
+
+            let mut address_builder = StructBuilder::new(
+                address_field.clone(),
+                vec![Box::new(street_builder), Box::new(zip_builder)],
+            );
+            address_builder.append(true);
+
+            let tags_field = Field::new("item", DataType::Utf8, false);
+            let mut tags_builder = ListBuilder::new(StringBuilder::new()).with_field(tags_field.clone());
+            tags_builder.values().append_value("A");
+            tags_builder.values().append_value("B");
+            tags_builder.append(true);
+
+            let notes_field = Field::new("item", DataType::Utf8, false);
+            let mut notes_builder = ListBuilder::new(StringBuilder::new()).with_field(notes_field.clone());
+            notes_builder.values().append_value("Note1");
+            notes_builder.values().append_value("Note2");
+            notes_builder.append(true);
+
+            let struct_fields = vec![
+                Field::new("name", DataType::Utf8, false),
+                Field::new("age", DataType::Int32, true),
+                Field::new("address", DataType::Struct(address_field.into()), true),
+                Field::new(
+                    "tags",
+                    DataType::List(Arc::new(tags_field)),
+                    false,
+                ),
+                Field::new(
+                    "notes",
+                    DataType::List(Arc::new(notes_field)),
+                    true,
+                ),
+            ];
+
+            StructArray::new(
+                struct_fields.into(),
+                vec![
+                    Arc::new(name_builder.finish()) as ArrayRef,
+                    Arc::new(age_builder.finish()) as ArrayRef,
+                    Arc::new(address_builder.finish()) as ArrayRef,
+                    Arc::new(tags_builder.finish()) as ArrayRef,
+                    Arc::new(notes_builder.finish()) as ArrayRef,
+                ],
+                None,
+            )
+        };
+
+        assert_eq!(
+            arr.as_any()
+                .downcast_ref::<StructArray>()
+                .unwrap()
+                .to_data(),
+            expected.to_data()
+        );
     }
 }
