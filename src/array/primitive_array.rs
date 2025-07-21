@@ -295,11 +295,16 @@ impl NativeArray for Decimal128Vec {
     type ArrowArray = Decimal128Array;
 
     fn push(&mut self, item: Self::Item) {
+        self.len += 1;
         self.data.push(item);
     }
 
     fn get(&self, idx: usize) -> Self::ItemRef {
-        self.data[idx]
+        if idx >= self.len {
+            None
+        } else {
+            self.data[idx]
+        }
     }
 
     fn to_arrow_array(&self) -> Self::ArrowArray {
