@@ -320,9 +320,10 @@ impl NativeArray for Decimal128Vec {
             .data
             .clone()
             .into_iter()
-            .map(|d| match d.is_some() {
-                true => Some(d.unwrap().value),
-                false => None,
+            .map(|d| if let Some(d) = d {
+                Some(d.value)
+            } else {
+                None
             })
             .collect();
 
