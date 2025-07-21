@@ -2,7 +2,7 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{Data, DeriveInput, Fields, Type, parse_macro_input};
 
-#[proc_macro_derive(IntoArrow)]
+#[proc_macro_derive(IntoArrowArray)]
 pub fn derive_into_arrow(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let struct_name = &input.ident;
@@ -304,7 +304,7 @@ pub fn derive_into_arrow(input: TokenStream) -> TokenStream {
 
     let expanded = quote! {
         #[automatically_derived]
-        impl trait_def::IntoArrow for #struct_name {
+        impl trait_def::IntoArrowArray for #struct_name {
             fn into_arrow(vec: &[Self]) -> arrow::array::ArrayRef {
                 use arrow::array::*;
                 use std::sync::Arc;
