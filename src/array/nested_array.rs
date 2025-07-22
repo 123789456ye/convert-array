@@ -1,10 +1,10 @@
 use arrow::array::{Array, ArrayRef, ListArray, MapArray, StructArray};
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field, Schema};
+use bit_vec::BitVec;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::array::dispatch::default_dyn_scalar;
 use crate::array::dispatch::dynscalar_vec_to_array;
 use crate::array::primitive_array::NativeArray;
 use crate::datatype::DynScalar;
@@ -23,12 +23,12 @@ where
         DynScalar::List(self.into_iter().map(|item| item.into()).collect())
     }
 }
-
 pub struct ListVec<T> {
-    pub data: Vec<T>,
+    pub data: Vec<T>, // Flat storage of all elements
     pub field: Field,
-    pub offsets: Vec<i32>,
-    pub validity: Vec<bool>,
+    pub offsets: Vec<i32>,             // Offset boundaries for each list
+    pub validity: Option<BitVec>, // Lazy allocation like Arrow (true = not null)
+    pub len: usize,
 }
 
 impl<T> ListVec<T> {
@@ -38,7 +38,8 @@ impl<T> ListVec<T> {
             data: Vec::new(),
             field,
             offsets: vec![0],
-            validity: Vec::new(),
+            validity: None,
+            len: 0,
         }
     }
 
@@ -46,7 +47,8 @@ impl<T> ListVec<T> {
     pub fn from_vec_with_field(data: Vec<Option<Vec<T>>>, field: Field) -> Self {
         let mut offsets = vec![0];
         let mut flat_data = Vec::new();
-        let mut validity = Vec::new();
+        let mut validity = BitVec::with_capacity(data.len());
+        let len = data.len();
 
         for opt_list in data {
             match opt_list {
@@ -66,7 +68,8 @@ impl<T> ListVec<T> {
             data: flat_data,
             field,
             offsets,
-            validity,
+            validity: Some(validity),
+            len,
         }
     }
 }
@@ -84,22 +87,34 @@ where
             Some(vec) => {
                 self.data.extend(vec);
                 self.offsets.push(self.data.len() as i32);
-                self.validity.push(true);
+                if let Some(ref mut validity) = self.validity {
+                    validity.push(true);
+                }
             }
             None => {
                 self.offsets.push(self.data.len() as i32);
-                self.validity.push(false);
+
+                if self.validity.is_none() {
+                    let mut validity = BitVec::from_elem(self.len, true);
+                    validity.push(false);
+                    self.validity = Some(validity);
+                } else {
+                    self.validity.as_mut().unwrap().push(false);
+                }
             }
         }
+        self.len += 1;
     }
 
     fn get(&self, index: usize) -> Self::ItemRef {
-        if !self.validity[index] {
-            return None;
+        match &self.validity {
+            Some(validity) if !validity[index] => None,
+            _ => {
+                let start = self.offsets[index] as usize;
+                let end = self.offsets[index + 1] as usize;
+                Some(self.data[start..end].to_vec())
+            }
         }
-        let start = self.offsets[index] as usize;
-        let end = self.offsets[index + 1] as usize;
-        Some(self.data[start..end].to_vec())
     }
 
     /// Converts this ListVec to an Arrow ListArray.
@@ -108,19 +123,15 @@ where
         let values_array = dynscalar_vec_to_array(values, self.field.data_type());
         let offsets_buffer = OffsetBuffer::new(self.offsets.clone().into());
 
-        let nulls = if self.validity.iter().all(|&x| x) {
-            None
-        } else {
-            Some(arrow::buffer::NullBuffer::from(
-                arrow::buffer::BooleanBuffer::from(self.validity.clone()),
-            ))
-        };
+        let validity = self.validity.as_ref().map(|validity| {
+            arrow::buffer::NullBuffer::from_iter(validity.iter())
+        });
 
         ListArray::new(
             Arc::new(self.field.clone()),
             offsets_buffer,
             values_array,
-            nulls,
+            validity,
         )
     }
 }
@@ -146,29 +157,62 @@ where
 }
 
 pub struct MapVec<K, V> {
-    pub data: Vec<Option<HashMap<K, V>>>,
+    pub data: Vec<HashMap<K, V>>,
+    pub offsets: Vec<i32>,
     pub key_field: Field,
     pub value_field: Field,
+    pub validity: Option<BitVec>,
+    pub len: usize,
 }
 
 impl<K, V> MapVec<K, V> {
-    /// Creates a new MapVec with the specified key and value field schemas.
     pub fn new(key_field: Field, value_field: Field) -> Self {
         Self {
             data: Vec::new(),
+            offsets: vec![0], // initial offset zero
             key_field,
             value_field,
+            validity: None,
+            len: 0,
         }
     }
 
-    /// Creates a new MapVec from existing data and field schemas.
     pub fn from_vec_with_fields(
         data: Vec<Option<HashMap<K, V>>>,
         key_field: Field,
         value_field: Field,
     ) -> Self {
+        let mut rows = Vec::with_capacity(data.len());
+        let mut has_nulls = false;
+        let mut nulls_vec = BitVec::with_capacity(data.len());
+        let mut offsets = Vec::with_capacity(data.len() + 1);
+        offsets.push(0);
+
+        for opt_row in data {
+            match opt_row {
+                Some(row) => {
+                    let prev = *offsets.last().unwrap();
+                    offsets.push(prev + row.len() as i32);
+                    rows.push(row);
+                    nulls_vec.push(true);
+                }
+                None => {
+                    let prev = *offsets.last().unwrap();
+                    offsets.push(prev);
+                    unsafe {
+                        rows.set_len(rows.len() + 1);
+                    }
+                    nulls_vec.push(false);
+                    has_nulls = true;
+                }
+            }
+        }
+
         Self {
-            data,
+            len: nulls_vec.len(),
+            data: rows,
+            offsets,
+            validity: if has_nulls { Some(nulls_vec) } else { None },
             key_field,
             value_field,
         }
@@ -185,43 +229,57 @@ where
     type ArrowArray = MapArray;
 
     fn push(&mut self, item: Self::Item) {
-        self.data.push(item)
+        match item {
+            Some(row) => {
+                let prev = *self.offsets.last().unwrap();
+                self.offsets.push(prev + row.len() as i32);
+                self.data.push(row);
+                if let Some(ref mut validity) = self.validity {
+                    validity.push(true);
+                }
+            }
+            None => {
+                let prev = *self.offsets.last().unwrap();
+                self.offsets.push(prev);
+                unsafe {
+                    self.data.set_len(self.data.len() + 1);
+                }
+                if self.validity.is_none() {
+                    let mut validity = BitVec::from_elem(self.len, true);
+                    validity.push(false);
+                    self.validity = Some(validity);
+                } else {
+                    self.validity.as_mut().unwrap().push(false);
+                }
+            }
+        }
+        self.len += 1;
     }
 
     fn get(&self, index: usize) -> Self::ItemRef {
-        self.data[index].clone()
+        match &self.validity {
+            Some(validity) if !validity[index] => None,
+            _ => Some(self.data[index].clone()),
+        }
     }
 
-    /// Converts this MapVec to an Arrow MapArray.
     fn to_arrow_array(&self) -> Self::ArrowArray {
-        let mut offsets = vec![0i32];
         let mut keys = Vec::new();
         let mut values = Vec::new();
-        let mut validity = Vec::with_capacity(self.data.len());
 
-        for map in &self.data {
-            if let Some(map) = map {
-                offsets.push(offsets.last().unwrap() + map.len() as i32);
+        for (i, map) in self.data.iter().enumerate() {
+            let is_valid = self.validity.as_ref().map(|v| v[i]).unwrap_or(true);
+
+            if is_valid {
                 for (k, v) in map {
                     keys.push(k.clone().into());
                     values.push(v.clone().into());
                 }
-                validity.push(true);
-            } else {
-                offsets.push(*offsets.last().unwrap());
-                validity.push(false);
             }
         }
 
         let keys_array = dynscalar_vec_to_array(keys, self.key_field.data_type());
         let values_array = dynscalar_vec_to_array(values, self.value_field.data_type());
-        let offsets_buffer = OffsetBuffer::new(offsets.into());
-
-        let entries_field = Field::new(
-            "entries",
-            DataType::Struct(vec![self.key_field.clone(), self.value_field.clone()].into()),
-            false,
-        );
 
         let struct_array = StructArray::new(
             vec![self.key_field.clone(), self.value_field.clone()].into(),
@@ -229,23 +287,28 @@ where
             None,
         );
 
-        let nulls = if validity.iter().all(|&x| x) {
-            None
-        } else {
-            Some(arrow::buffer::NullBuffer::from(
-                arrow::buffer::BooleanBuffer::from(validity),
-            ))
-        };
+        let offsets_buffer = OffsetBuffer::new(self.offsets.clone().into());
+
+        let validity = self.validity.as_ref().map(|validity| {
+            arrow::buffer::NullBuffer::from_iter(validity.iter())
+        });
+
+        let entries_field = Field::new(
+            "entries",
+            DataType::Struct(vec![self.key_field.clone(), self.value_field.clone()].into()),
+            false,
+        );
 
         MapArray::new(
             Arc::new(entries_field),
             offsets_buffer,
             struct_array,
-            nulls,
+            validity,
             false,
         )
     }
 }
+
 // ========== FixedSizeList Type Implementation ==========
 
 /// A vector implementation for Arrow FixedSizeList arrays.
@@ -264,8 +327,11 @@ where
 }
 
 pub struct FixedSizeListVec<T> {
-    pub data: Vec<Option<Vec<T>>>,
+    pub data: Vec<T>,
     pub field: Field,
+    pub offsets: Vec<i32>,
+    pub validity: Option<BitVec>,
+    pub len: usize,
     pub size: i32,
 }
 
@@ -275,13 +341,42 @@ impl<T> FixedSizeListVec<T> {
         Self {
             data: Vec::new(),
             field,
+            offsets: vec![0],
+            validity: None,
+            len: 0,
             size,
         }
     }
 
     /// Creates a new FixedSizeListVec from existing data, field schema, and size.
     pub fn from_vec_with_field(data: Vec<Option<Vec<T>>>, field: Field, size: i32) -> Self {
-        Self { data, field, size }
+        let mut offsets = vec![0];
+        let mut flat_data = Vec::new();
+        let mut validity = BitVec::with_capacity(data.len());
+        let len = data.len();
+
+        for opt_list in data {
+            match opt_list {
+                Some(list) => {
+                    flat_data.extend(list);
+                    offsets.push(flat_data.len() as i32);
+                    validity.push(true);
+                }
+                None => {
+                    offsets.push(flat_data.len() as i32);
+                    validity.push(false);
+                }
+            }
+        }
+
+        Self {
+            data: flat_data,
+            field,
+            offsets,
+            validity: Some(validity),
+            len,
+            size,
+        }
     }
 }
 
@@ -294,50 +389,61 @@ where
     type ArrowArray = arrow::array::FixedSizeListArray;
 
     fn push(&mut self, item: Self::Item) {
-        if let Some(ref vec) = item {
-            if vec.len() != self.size as usize {
-                panic!(
-                    "FixedSizeList size mismatch: expected {}, got {}",
-                    self.size,
-                    vec.len()
-                );
+        match item {
+            Some(vec) => {
+                if vec.len() != self.size as usize {
+                    panic!(
+                        "FixedSizeList size mismatch: expected {}, got {}",
+                        self.size,
+                        vec.len()
+                    );
+                }
+                self.data.extend(vec);
+                self.offsets.push(self.data.len() as i32);
+                if let Some(ref mut validity) = self.validity {
+                    validity.push(true);
+                }
+            }
+            None => {
+                self.offsets.push(self.data.len() as i32);
+
+                if self.validity.is_none() {
+                    let mut validity = BitVec::from_elem(self.len, true);
+                    validity.push(false);
+                    self.validity = Some(validity);
+                } else {
+                    self.validity.as_mut().unwrap().push(false);
+                }
             }
         }
-        self.data.push(item);
+        self.len += 1;
     }
 
     fn get(&self, index: usize) -> Self::ItemRef {
-        self.data[index].clone()
+        match &self.validity {
+            Some(validity) if !validity[index] => None,
+            _ => {
+                let start = self.offsets[index] as usize;
+                let end = self.offsets[index + 1] as usize;
+                Some(self.data[start..end].to_vec())
+            }
+        }
     }
 
     /// Converts this FixedSizeListVec to an Arrow FixedSizeListArray.
     fn to_arrow_array(&self) -> Self::ArrowArray {
-        let mut values = Vec::new();
-        let mut validity = Vec::with_capacity(self.data.len());
-
-        for list in &self.data {
-            if let Some(list) = list {
-                for item in list {
-                    values.push(item.clone().into());
-                }
-                validity.push(true);
-            } else {
-                // For null fixed-size lists, we still need to add placeholder values
-                // to maintain the fixed-size constraint
-                for _ in 0..self.size {
-                    values.push(DynScalar::Null);
-                }
-                validity.push(false);
-            }
-        }
-
+        let values = self.data.iter().map(|x| x.clone().into()).collect();
         let values_array = dynscalar_vec_to_array(values, self.field.data_type());
+
+        let validity = self.validity.as_ref().map(|validity| {
+            arrow::buffer::NullBuffer::from_iter(validity.iter())
+        });
 
         arrow::array::FixedSizeListArray::new(
             Arc::new(self.field.clone()),
             self.size,
             values_array,
-            Some(validity.into()),
+            validity,
         )
     }
 }
@@ -347,25 +453,55 @@ where
 /// A vector implementation for Arrow Struct arrays.
 /// Stores rows as HashMaps and converts them to Arrow StructArray format.
 pub struct StructVec {
-    pub data: Vec<Option<HashMap<String, DynScalar>>>,
+    pub rows: Vec<HashMap<String, DynScalar>>, // Dense storage, undefined for nulls
+    pub validity: Option<BitVec>,         // Only allocate if nulls exist (Arrow pattern)
     pub schema: Schema,
+    pub len: usize,
 }
 
 impl StructVec {
     /// Creates a new StructVec with the specified schema.
     pub fn new(schema: Schema) -> Self {
         Self {
-            data: Vec::new(),
+            rows: Vec::new(),
+            validity: None,
             schema,
+            len: 0,
         }
     }
 
-    // Creates a new StructVec from existing data and schema.
+    /// Creates a new StructVec from existing data and schema.
     pub fn from_vec_with_schema(
         data: Vec<Option<HashMap<String, DynScalar>>>,
         schema: Schema,
     ) -> Self {
-        Self { data, schema }
+        let mut rows = Vec::with_capacity(data.len());
+        let mut has_nulls = false;
+        let mut nulls_vec = BitVec::with_capacity(data.len());
+
+        for opt_row in data {
+            match opt_row {
+                Some(row) => {
+                    rows.push(row);
+                    nulls_vec.push(true);
+                }
+                None => {
+                    // Reserve space but don't initialize (undefined like Arrow)
+                    unsafe {
+                        rows.set_len(rows.len() + 1);
+                    }
+                    nulls_vec.push(false);
+                    has_nulls = true;
+                }
+            }
+        }
+
+        Self {
+            len: nulls_vec.len(),
+            rows,
+            validity: if has_nulls { Some(nulls_vec) } else { None },
+            schema,
+        }
     }
 }
 
@@ -375,35 +511,64 @@ impl NativeArray for StructVec {
     type ArrowArray = StructArray;
 
     fn push(&mut self, item: Self::Item) {
-        self.data.push(item);
+        match item {
+            Some(row) => {
+                self.rows.push(row);
+                if let Some(ref mut validity) = self.validity {
+                    validity.push(true);
+                }
+            }
+            None => {
+                if self.validity.is_none() {
+                    let mut nulls = BitVec::from_elem(self.len, true);
+                    nulls.push(false);
+                    self.validity = Some(nulls);
+                } else {
+                    self.validity.as_mut().unwrap().push(false);
+                }
+
+                // Reserve space but don't initialize (Arrow pattern)
+                unsafe {
+                    self.rows.reserve(1);
+                    self.rows.set_len(self.rows.len() + 1);
+                    // rows[current_index] is undefined - never access it
+                }
+            }
+        }
+        self.len += 1;
     }
 
     fn get(&self, index: usize) -> Self::ItemRef {
-        self.data[index].clone()
+        match &self.validity {
+            Some(validity) if !validity[index] => None,
+            _ => Some(self.rows[index].clone()),
+        }
     }
 
     /// Converts this StructVec to an Arrow StructArray.
     fn to_arrow_array(&self) -> Self::ArrowArray {
         let mut field_arrays: Vec<ArrayRef> = Vec::new();
-        let validity: Vec<bool> = self.data.iter().map(|row| row.is_some()).collect();
 
         for field in self.schema.fields() {
             let field_name = field.name();
-            let field_values: Vec<DynScalar> = self
-                .data
-                .iter()
-                .map(|opt_row| match opt_row {
-                    None => DynScalar::Null,
-                    Some(row) => row
-                        .get(field_name)
-                        .cloned()
-                        .unwrap_or_else(|| default_dyn_scalar(field.data_type())),
+            let field_values: Vec<DynScalar> = (0..self.len)
+                .map(|i| {
+                    if let Some(ref nulls) = self.validity {
+                        if !nulls[i] {
+                            return DynScalar::Null;
+                        }
+                    }
+                    match self.rows[i].get(field_name) {
+                        Some(value) => value.clone(),
+                        None => DynScalar::Null,
+                    }
                 })
                 .collect();
 
             let array = dynscalar_vec_to_array(field_values, field.data_type());
             field_arrays.push(array);
         }
+
         for (field, arr) in self.schema.fields().iter().zip(field_arrays.iter()) {
             assert_eq!(
                 arr.data_type(),
@@ -415,13 +580,11 @@ impl NativeArray for StructVec {
             );
         }
 
-        let nulls = if validity.iter().all(|&x| x) {
-            None
-        } else {
-            Some(validity.into())
-        };
+        let validity = self.validity.as_ref().map(|validity| {
+            arrow::buffer::NullBuffer::from_iter(validity.iter())
+        });
 
-        StructArray::new(self.schema.fields().clone(), field_arrays, nulls)
+        StructArray::new(self.schema.fields().clone(), field_arrays, validity)
     }
 }
 
@@ -432,10 +595,10 @@ mod tests {
     use super::*;
     //use crate::register_struct;
     use arrow::array::*;
-    use derive::IntoArrow;
+    use derive::IntoArrowArray;
     use derive_dynscalar::IntoDynScalar;
     use std::collections::HashMap;
-    use trait_def::IntoArrow;
+    use trait_def::IntoArrowArray;
 
     #[test]
     fn test_list_vec_nested_struct() {
@@ -539,6 +702,45 @@ mod tests {
         // Note: Direct equality may fail due to HashMap iteration order differences
         // but the arrays are logically equivalent
         // assert_eq!(our_array, expected_array);
+    }
+
+    #[test]
+    fn test_fixed_size_list() {
+        let inner_field = Field::new("item", DataType::Int32, false);
+        let _list_field = Field::new(
+            "numbers",
+            DataType::FixedSizeList(Arc::new(inner_field.clone()), 3),
+            false,
+        );
+
+        let mut list_vec = FixedSizeListVec::new(inner_field, 3);
+        list_vec.push(Some(vec![1, 2, 3]));
+        list_vec.push(Some(vec![4, 5, 6]));
+        list_vec.push(Some(vec![7, 8, 9]));
+
+        let arrow_array = list_vec.to_arrow_array();
+
+        // Test direct construction using arrow-rs
+        let expected = {
+            let values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+            FixedSizeListArray::new(
+                Arc::new(Field::new("item", DataType::Int32, false)),
+                3,
+                Arc::new(values),
+                None,
+            )
+        };
+
+        assert_eq!(arrow_array, expected);
+        assert_eq!(arrow_array.len(), expected.len());
+        assert_eq!(arrow_array.data_type(), expected.data_type());
+
+        // Verify the values match
+        for i in 0..arrow_array.len() {
+            let our_list = arrow_array.value(i);
+            let expected_list = expected.value(i);
+            assert_eq!(our_list.as_ref(), expected_list.as_ref());
+        }
     }
 
     #[test]
@@ -1063,9 +1265,149 @@ mod tests {
         assert_eq!(arrow_array, expected);
     }
 
-    use arrow::array::{Array, Int32Builder, ListBuilder, StringBuilder, StructBuilder};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use std::sync::Arc;
+    #[test]
+    fn test_dynamic_schema() {
+        let fields = vec![
+            Field::new("name", DataType::Utf8, true),
+            Field::new("age", DataType::Int32, true),
+        ];
+
+        // VALUES: [Struct, Null, Struct with missing 'age']
+        let mut row1 = HashMap::new();
+        row1.insert("name".to_string(), DynScalar::String("Alice".to_string()));
+        row1.insert("age".to_string(), DynScalar::Int32(30));
+
+        let mut row3 = HashMap::new();
+        row3.insert("name".to_string(), DynScalar::String("Charlie".to_string()));
+        // `age` missing!
+
+        let values = vec![
+            DynScalar::Struct(row1), // row 0
+            DynScalar::Null,         // row 1 → NULL
+            DynScalar::Struct(row3), // row 2 → age should be NULL
+        ];
+
+        let mut field_arrays: Vec<ArrayRef> = Vec::new();
+
+        for field in &fields {
+            let field_name = field.name();
+            let field_values: Vec<DynScalar> = values
+                .iter()
+                .map(|v| match v {
+                    DynScalar::Struct(map) => {
+                        map.get(field_name).cloned().unwrap_or(DynScalar::Null)
+                    }
+                    DynScalar::Null => DynScalar::Null,
+                    _ => panic!("Unexpected: {:?}", v),
+                })
+                .collect();
+
+            let arr = dynscalar_vec_to_array(field_values, field.data_type());
+            field_arrays.push(arr);
+        }
+
+        let null_mask: Vec<bool> = values
+            .iter()
+            .map(|v| matches!(v, DynScalar::Struct(_)))
+            .collect();
+
+        let validity = if null_mask.iter().all(|&x| x) {
+            None
+        } else {
+            Some(arrow::buffer::NullBuffer::from(null_mask))
+        };
+
+        let struct_arr = StructArray::new(fields.into(), field_arrays.clone(), validity);
+
+        assert_eq!(struct_arr.len(), 3);
+
+        assert_eq!(struct_arr.is_null(1), true);
+        assert_eq!(struct_arr.is_valid(0), true);
+
+        let name_array = struct_arr
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(name_array.value(0), "Alice");
+        assert_eq!(name_array.is_null(1), true); // parent null → child null
+        assert_eq!(name_array.value(2), "Charlie");
+
+        let age_array = struct_arr
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(age_array.value(0), 30);
+        assert_eq!(age_array.is_null(1), true); // parent null → child null
+        assert_eq!(age_array.is_null(2), true); // missing age → null
+
+        let runtime_fields = vec![
+            Field::new("city", DataType::Utf8, true), // New field not in data!
+            Field::new("name", DataType::Utf8, true), // Keep only name, move after city
+        ];
+
+        let mut runtime_field_arrays: Vec<ArrayRef> = Vec::new();
+
+        for field in &runtime_fields {
+            let field_name = field.name();
+            let field_values: Vec<DynScalar> = values
+                .iter()
+                .map(|v| match v {
+                    DynScalar::Struct(map) => {
+                        map.get(field_name).cloned().unwrap_or(DynScalar::Null)
+                    }
+                    DynScalar::Null => DynScalar::Null,
+                    _ => panic!("Unexpected: {:?}", v),
+                })
+                .collect();
+
+            let arr = dynscalar_vec_to_array(field_values, field.data_type());
+            runtime_field_arrays.push(arr);
+        }
+
+        let runtime_null_mask: Vec<bool> = values
+            .iter()
+            .map(|v| matches!(v, DynScalar::Struct(_)))
+            .collect();
+
+        let runtime_validity = if runtime_null_mask.iter().all(|&x| x) {
+            None
+        } else {
+            Some(arrow::buffer::NullBuffer::from(
+                arrow::buffer::BooleanBuffer::from(runtime_null_mask),
+            ))
+        };
+
+        let runtime_struct_arr = StructArray::new(
+            runtime_fields.clone().into(),
+            runtime_field_arrays.clone(),
+            runtime_validity,
+        );
+
+        assert_eq!(runtime_struct_arr.len(), 3);
+
+        assert_eq!(runtime_struct_arr.is_null(1), true);
+
+        let city_array = runtime_struct_arr
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(city_array.len(), 3);
+        assert_eq!(city_array.is_null(0), true); // All NULL because no data
+        assert_eq!(city_array.is_null(1), true); // Parent null → NULL
+        assert_eq!(city_array.is_null(2), true);
+
+        let name_array = runtime_struct_arr
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(name_array.value(0), "Alice");
+        assert_eq!(name_array.is_null(1), true); // Parent null
+        assert_eq!(name_array.value(2), "Charlie");
+    }
 
     #[test]
     fn test_complex_struct() {
@@ -1293,13 +1635,13 @@ mod tests {
 
     #[test]
     fn test_complex_struct2() {
-        #[derive(IntoArrow, Default, Clone)]
+        #[derive(IntoArrowArray, Default, Clone)]
         struct Address {
             street: String,
             zip: Option<i32>,
         }
 
-        #[derive(IntoArrow)]
+        #[derive(IntoArrowArray)]
         struct Person {
             name: String,
             age: Option<i32>,
@@ -1309,7 +1651,7 @@ mod tests {
         }
 
         let mut mask = arrow::array::builder::BooleanBufferBuilder::new(1);
-        mask.append_slice(vec![true,false].as_slice());
+        mask.append_slice(vec![true, false].as_slice());
 
         let persons = vec![Person {
             name: "Alice".into(),
@@ -1346,13 +1688,15 @@ mod tests {
             address_builder.append(true);
 
             let tags_field = Field::new("item", DataType::Utf8, false);
-            let mut tags_builder = ListBuilder::new(StringBuilder::new()).with_field(tags_field.clone());
+            let mut tags_builder =
+                ListBuilder::new(StringBuilder::new()).with_field(tags_field.clone());
             tags_builder.values().append_value("A");
             tags_builder.values().append_value("B");
             tags_builder.append(true);
 
             let notes_field = Field::new("item", DataType::Utf8, false);
-            let mut notes_builder = ListBuilder::new(StringBuilder::new()).with_field(notes_field.clone());
+            let mut notes_builder =
+                ListBuilder::new(StringBuilder::new()).with_field(notes_field.clone());
             notes_builder.values().append_value("Note1");
             notes_builder.values().append_value("Note2");
             notes_builder.append(true);
@@ -1361,16 +1705,8 @@ mod tests {
                 Field::new("name", DataType::Utf8, false),
                 Field::new("age", DataType::Int32, true),
                 Field::new("address", DataType::Struct(address_field.into()), true),
-                Field::new(
-                    "tags",
-                    DataType::List(Arc::new(tags_field)),
-                    false,
-                ),
-                Field::new(
-                    "notes",
-                    DataType::List(Arc::new(notes_field)),
-                    true,
-                ),
+                Field::new("tags", DataType::List(Arc::new(tags_field)), false),
+                Field::new("notes", DataType::List(Arc::new(notes_field)), true),
             ];
 
             StructArray::new(

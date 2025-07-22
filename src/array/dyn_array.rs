@@ -541,6 +541,7 @@ mod tests {
                 .with_precision_and_scale(10, 2)
                 .unwrap(),
         );
+        println!("arr: {:?}, {:?}, {:?}", arr.is_null(0), arr.is_null(1), arr.is_null(2));
         assert_eq!(arr.values(), expected.values());
         assert_eq!(arr.precision(), expected.precision());
         assert_eq!(arr.scale(), expected.scale());

@@ -1,12 +1,9 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, ListArray, MapArray, StructArray};
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::*;
 
-use crate::array::primitive_array::Decimal128Value;
-use crate::array::time_array::*;
 use crate::datatype::DynScalar;
 
 /// Converts a Vec<DynScalar> to an Arrow ArrayRef using Arrow builders for optimal performance.
@@ -229,9 +226,7 @@ pub fn dynscalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> A
             let validity = if null_mask.iter().all(|&x| x) {
                 None
             } else {
-                Some(arrow::buffer::NullBuffer::from(
-                    arrow::buffer::BooleanBuffer::from(null_mask),
-                ))
+                Some(arrow::buffer::NullBuffer::from(null_mask))
             };
 
             Arc::new(ListArray::new(
@@ -252,10 +247,12 @@ pub fn dynscalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> A
                 let field_values: Vec<DynScalar> = values
                     .iter()
                     .map(|v| match v {
-                        DynScalar::Struct(map) => map
-                            .get(field_name)
-                            .cloned()
-                            .unwrap_or_else(|| default_dyn_scalar(field.data_type())),
+                        DynScalar::Struct(map) => {
+                            match map.get(field_name) {
+                                Some(child) => child.clone(),
+                                None => DynScalar::Null 
+                            }
+                        },
                         DynScalar::Null => DynScalar::Null,
                         _ => panic!(
                             "Type mismatch: expected Struct, Struct, or Null, got {:?}",
@@ -287,9 +284,7 @@ pub fn dynscalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> A
             let validity = if null_mask.iter().all(|&x| x) {
                 None
             } else {
-                Some(arrow::buffer::NullBuffer::from(
-                    arrow::buffer::BooleanBuffer::from(null_mask),
-                ))
+                Some(arrow::buffer::NullBuffer::from(null_mask))
             };
 
             Arc::new(StructArray::new(fields.clone(), field_arrays, validity))
@@ -342,9 +337,7 @@ pub fn dynscalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> A
             let validity = if null_mask.iter().all(|&x| x) {
                 None
             } else {
-                Some(arrow::buffer::NullBuffer::from(
-                    arrow::buffer::BooleanBuffer::from(null_mask),
-                ))
+                Some(arrow::buffer::NullBuffer::from(null_mask))
             };
 
             Arc::new(MapArray::new(
@@ -391,9 +384,7 @@ pub fn dynscalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> A
             let validity = if null_mask.iter().all(|&x| x) {
                 None
             } else {
-                Some(arrow::buffer::NullBuffer::from(
-                    arrow::buffer::BooleanBuffer::from(null_mask),
-                ))
+                Some(arrow::buffer::NullBuffer::from(null_mask))
             };
 
             Arc::new(arrow::array::FixedSizeListArray::new(
@@ -405,58 +396,6 @@ pub fn dynscalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> A
         }
 
         _ => panic!("Unsupported data type: {:?}", data_type),
-    }
-}
-
-/// Returns a default DynScalar value for the given Arrow DataType.
-/// Used for filling missing values in struct fields.
-pub fn default_dyn_scalar(data_type: &DataType) -> DynScalar {
-    match data_type {
-        DataType::Boolean => DynScalar::Bool(false),
-        DataType::Int8 => DynScalar::Int8(0),
-        DataType::Int16 => DynScalar::Int16(0),
-        DataType::Int32 => DynScalar::Int32(0),
-        DataType::Int64 => DynScalar::Int64(0),
-        DataType::UInt8 => DynScalar::UInt8(0),
-        DataType::UInt16 => DynScalar::UInt16(0),
-        DataType::UInt32 => DynScalar::UInt32(0),
-        DataType::UInt64 => DynScalar::UInt64(0),
-        DataType::Float32 => DynScalar::Float32(0.0),
-        DataType::Float64 => DynScalar::Float64(0.0),
-        DataType::Utf8 => DynScalar::String(String::new()),
-        DataType::Binary => DynScalar::Binary(Vec::new()),
-        DataType::List(_) => DynScalar::List(Vec::new()),
-        DataType::Struct(_) => DynScalar::Struct(HashMap::new()),
-        DataType::Map(_, _) => DynScalar::Map(Vec::new()),
-        DataType::FixedSizeList(_, size) => DynScalar::FixedSizeList(Vec::new(), *size),
-        DataType::Timestamp(unit, _) => match unit {
-            TimeUnit::Second => DynScalar::TimestampSecond(TimestampSecond(0)),
-            TimeUnit::Millisecond => DynScalar::TimestampMillisecond(TimestampMillisecond(0)),
-            TimeUnit::Microsecond => DynScalar::TimestampMicrosecond(TimestampMicrosecond(0)),
-            TimeUnit::Nanosecond => DynScalar::TimestampNanosecond(TimestampNanosecond(0)),
-        },
-        DataType::Time32(unit) => match unit {
-            TimeUnit::Second => DynScalar::Time32Second(Time32Second(0)),
-            TimeUnit::Millisecond => DynScalar::Time32Millisecond(Time32Millisecond(0)),
-            _ => panic!("Unsupported Time32 unit: {:?}", unit),
-        },
-        DataType::Time64(unit) => match unit {
-            TimeUnit::Microsecond => DynScalar::Time64Microsecond(Time64Microsecond(0)),
-            TimeUnit::Nanosecond => DynScalar::Time64Nanosecond(Time64Nanosecond(0)),
-            _ => panic!("Unsupported Time64 unit: {:?}", unit),
-        },
-        DataType::Duration(unit) => match unit {
-            TimeUnit::Second => DynScalar::DurationSecond(DurationSecond(0)),
-            TimeUnit::Millisecond => DynScalar::DurationMillisecond(DurationMillisecond(0)),
-            TimeUnit::Microsecond => DynScalar::DurationMicrosecond(DurationMicrosecond(0)),
-            TimeUnit::Nanosecond => DynScalar::DurationNanosecond(DurationNanosecond(0)),
-        },
-        DataType::Decimal128(precision, scale) => DynScalar::Decimal128(Decimal128Value {
-            value: 0,
-            precision: *precision,
-            scale: *scale,
-        }),
-        _ => panic!("Unsupported data type for default: {:?}", data_type),
     }
 }
 
@@ -617,27 +556,5 @@ mod tests {
 
         // Check fourth list: null
         assert!(list_array.is_null(3));
-    }
-
-    #[test]
-    fn test_default_dyn_scalar() {
-        // Test default  values for different types
-        assert_eq!(
-            default_dyn_scalar(&DataType::Boolean),
-            DynScalar::Bool(false)
-        );
-        assert_eq!(default_dyn_scalar(&DataType::Int32), DynScalar::Int32(0));
-        assert_eq!(
-            default_dyn_scalar(&DataType::Utf8),
-            DynScalar::String(String::new())
-        );
-        assert_eq!(
-            default_dyn_scalar(&DataType::Binary),
-            DynScalar::Binary(vec![])
-        );
-
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
-        let list_type = DataType::List(field);
-        assert_eq!(default_dyn_scalar(&list_type), DynScalar::List(vec![]));
     }
 }

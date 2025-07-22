@@ -1,7 +1,10 @@
+use std::u8;
+
 use arrow::array::{
-    Array, ArrowPrimitiveType, BinaryArray, BinaryBuilder, BooleanArray, BooleanBuilder,
-    Decimal128Array, PrimitiveArray, StringArray, StringBuilder,
+    Array, ArrowPrimitiveType, BinaryArray, BooleanArray,
+    Decimal128Array, PrimitiveArray, StringArray,
 };
+use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer, OffsetBuffer};
 use arrow::datatypes::*;
 
 use bit_vec::BitVec;
@@ -28,23 +31,47 @@ pub trait NativeArray: 'static {
 /// A typed vector wrapper for Arrow primitive types.
 /// Stores native values and provides conversion to Arrow arrays.
 pub struct TypedVec<P: ArrowPrimitiveType> {
-    pub data: Vec<Option<P::Native>>,
+    pub data: Vec<P::Native>,
+    pub validity: Option<BitVec>,
     pub len: usize,
 }
 
-impl<P> TypedVec<P>
-where
-    P: ArrowPrimitiveType,
-    PrimitiveArray<P>: From<Vec<Option<P::Native>>>,
-{
-    /// Creates a new TypedVec from a vector of optional native values.
+impl<P: ArrowPrimitiveType> TypedVec<P> {
+    /// Create from Vec<Option<T>>.
     pub fn from_vec(vec: Vec<Option<P::Native>>) -> Self {
+        let len = vec.len();
+        let mut data = Vec::with_capacity(len);
+        let mut validity: Option<BitVec> = None;
+
+        for v in vec {
+            match v {
+                Some(val) => {
+                    data.push(val);
+                    if let Some(n) = validity.as_mut() {
+                        n.push(true);
+                    }
+                }
+                None => {
+                    data.push(P::Native::default());
+                    if validity.is_none() {
+                        let mut n = BitVec::from_elem(data.len() - 1, true);
+                        n.push(false);
+                        validity = Some(n);
+                    } else {
+                        validity.as_mut().unwrap().push(false);
+                    }
+                }
+            }
+        }
+
         Self {
-            len: vec.len(),
-            data: vec,
+            data,
+            validity,
+            len,
         }
     }
 }
+
 impl<P> NativeArray for TypedVec<P>
 where
     P: ArrowPrimitiveType,
@@ -55,21 +82,46 @@ where
     type ArrowArray = PrimitiveArray<P>;
 
     fn push(&mut self, v: Self::Item) {
+        match v {
+            Some(val) => {
+                self.data.push(val);
+                if let Some(validity) = self.validity.as_mut() {
+                    validity.push(true);
+                }
+            }
+            None => {
+                self.data.push(P::Native::default());
+                if self.validity.is_none() {
+                    let mut n = BitVec::from_elem(self.len, true);
+                    n.push(false);
+                    self.validity = Some(n);
+                } else {
+                    self.validity.as_mut().unwrap().push(false);
+                }
+            }
+        }
         self.len += 1;
-        self.data.push(v)
     }
+
     fn get(&self, idx: usize) -> Self::ItemRef {
         if idx >= self.len {
             None
         } else {
-            self.data[idx]
+            match &self.validity {
+                Some(validity) if !validity[idx] => None,
+                _ => Some(self.data[idx]),
+            }
         }
     }
+
     fn to_arrow_array(&self) -> Self::ArrowArray {
-        self.data.clone().into()
+        let values = Buffer::from_slice_ref(&self.data);
+        let validity = self.validity.as_ref().map(|validity| {
+            arrow::buffer::NullBuffer::from_iter(validity.iter())
+        });
+        PrimitiveArray::new(values.into(), validity)
     }
 }
-
 /// Maps Rust types to their corresponding Arrow primitive types.
 ///
 /// This trait enables generic conversion from Vec<T> to TypedVec<T::ArrowType>
@@ -101,20 +153,42 @@ for_all_primitivetype!(impl_arrowtyped);
 impl<T> From<Vec<Option<T>>> for TypedVec<<T as ArrowTyped>::ArrowType>
 where
     T: ArrowTyped,
-    <<T as ArrowTyped>::ArrowType as ArrowPrimitiveType>::Native: From<T>,
+    <<T as ArrowTyped>::ArrowType as ArrowPrimitiveType>::Native: From<T> + Default,
 {
     fn from(vec: Vec<Option<T>>) -> Self {
         let len = vec.len();
-        let native_vec = vec
-            .into_iter()
-            .map(|opt| opt.map(<<T as ArrowTyped>::ArrowType as ArrowPrimitiveType>::Native::from))
-            .collect();
-        TypedVec {
+        let mut data = Vec::with_capacity(len);
+        let mut validity: Option<BitVec> = None;
+
+        for opt in vec {
+            match opt {
+                Some(v) => {
+                    data.push(<<T as ArrowTyped>::ArrowType as ArrowPrimitiveType>::Native::from(v));
+                    if let Some(n) = validity.as_mut() {
+                        n.push(true);
+                    }
+                }
+                None => {
+                    data.push(<<T as ArrowTyped>::ArrowType as ArrowPrimitiveType>::Native::default());
+                    if validity.is_none() {
+                        let mut n = BitVec::from_elem(data.len() - 1, true);
+                        n.push(false);
+                        validity = Some(n);
+                    } else {
+                        validity.as_mut().unwrap().push(false);
+                    }
+                }
+            }
+        }
+
+        Self {
             len,
-            data: native_vec,
+            data,
+            validity,
         }
     }
 }
+
 
 pub type Int8Vec = TypedVec<Int8Type>;
 pub type Int16Vec = TypedVec<Int16Type>;
@@ -131,16 +205,43 @@ pub type Float64Vec = TypedVec<Float64Type>;
 
 /// A vector for storing boolean values using BitVec for efficient storage.
 pub struct BoolVec {
-    pub data: Vec<Option<bool>>,
+    pub data: BitVec,
+    pub validity: Option<BitVec>,
     pub len: usize,
 }
 
 impl BoolVec {
-    /// Creates a new BoolVec from a vector of optional boolean values.
+    /// Create from Vec<Option<bool>>
     pub fn from_vec(vec: Vec<Option<bool>>) -> Self {
+        let len = vec.len();
+        let mut data = BitVec::with_capacity(len);
+        let mut validity: Option<BitVec> = None;
+
+        for opt in vec {
+            match opt {
+                Some(b) => {
+                    data.push(b);
+                    if let Some(n) = validity.as_mut() {
+                        n.push(true);
+                    }
+                }
+                None => {
+                    data.push(false); // dummy
+                    if validity.is_none() {
+                        let mut n = BitVec::from_elem(data.len() - 1, true);
+                        n.push(false);
+                        validity = Some(n);
+                    } else {
+                        validity.as_mut().unwrap().push(false);
+                    }
+                }
+            }
+        }
+
         Self {
-            len: vec.len(),
-            data: vec,
+            data,
+            validity,
+            len,
         }
     }
 }
@@ -151,120 +252,336 @@ impl NativeArray for BoolVec {
     type ArrowArray = BooleanArray;
 
     fn push(&mut self, item: Self::Item) {
+        match item {
+            Some(b) => {
+                self.data.push(b);
+                if let Some(n) = self.validity.as_mut() {
+                    n.push(true);
+                }
+            }
+            None => {
+                self.data.push(false);
+                if self.validity.is_none() {
+                    let mut n = BitVec::from_elem(self.len, true);
+                    n.push(false);
+                    self.validity = Some(n);
+                } else {
+                    self.validity.as_mut().unwrap().push(false);
+                }
+            }
+        }
         self.len += 1;
-        self.data.push(item)
     }
 
     fn get(&self, idx: usize) -> Self::ItemRef {
         if idx >= self.len {
             None
         } else {
-            self.data[idx]
+            match &self.validity {
+                Some(n) if !n[idx] => None,
+                _ => Some(self.data[idx]),
+            }
         }
     }
 
     fn to_arrow_array(&self) -> Self::ArrowArray {
-        let mut builder = BooleanBuilder::new();
-        for opt_b in &self.data {
-            match opt_b {
-                Some(b) => builder.append_value(*b),
-                None => builder.append_null(),
-            }
-        }
-        builder.finish()
-    }
-}
-
-impl From<BitVec> for BoolVec {
-    fn from(bitvec: BitVec) -> Self {
-        let mut data = Vec::with_capacity(bitvec.len());
-        for elem in bitvec {
-            data.push(Some(elem));
-        }
-        Self {
-            len: data.len(),
-            data,
-        }
+        let values = BooleanBuffer::from_iter(self.data.clone().into_iter());
+        let validity = self.validity.as_ref().map(|validity| {
+            arrow::buffer::NullBuffer::from_iter(validity.iter())
+        });
+        BooleanArray::new(values, validity)
     }
 }
 
 impl From<Vec<bool>> for BoolVec {
     fn from(vec: Vec<bool>) -> Self {
-        let mut data = Vec::with_capacity(vec.len());
-        for elem in vec {
-            data.push(Some(elem));
-        }
+        let data = BitVec::from_iter(vec.into_iter());
         Self {
             len: data.len(),
             data,
+            validity: None,
         }
     }
 }
 
-/// Macro to implement vector types with builders for string and binary data.
-/// Generates both non-optional and optional vector implementations.
-macro_rules! impl_builder_vec {
-    (
-        $vec_name:ident,
-        $item_type:ty,
-        $arrow_array:ty,
-        $builder:ty
-    ) => {
-        pub struct $vec_name {
-            pub data: Vec<$item_type>,
-            pub len: usize,
-        }
-
-        impl $vec_name {
-            pub fn from_vec(vec: Vec<$item_type>) -> Self {
-                Self {
-                    len: vec.len(),
-                    data: vec,
-                }
-            }
-        }
-
-        impl NativeArray for $vec_name {
-            type Item = $item_type;
-            type ItemRef = $item_type;
-            type ArrowArray = $arrow_array;
-
-            fn push(&mut self, item: Self::Item) {
-                self.len += 1;
-                self.data.push(item)
-            }
-
-            fn get(&self, idx: usize) -> Self::ItemRef {
-                if idx >= self.len {
-                    None
-                } else {
-                    self.data[idx].clone()
-                }
-            }
-
-            fn to_arrow_array(&self) -> Self::ArrowArray {
-                let mut builder = <$builder>::new();
-                for item in &self.data {
-                    match item {
-                        Some(item) => builder.append_value(item),
-                        None => builder.append_null(),
-                    }
-                }
-                builder.finish()
-            }
-        }
-
-        impl From<Vec<$item_type>> for $vec_name {
-            fn from(vec: Vec<$item_type>) -> Self {
-                Self::from_vec(vec)
-            }
-        }
-    };
+impl From<Vec<Option<bool>>> for BoolVec {
+    fn from(vec: Vec<Option<bool>>) -> Self {
+        Self::from_vec(vec)
+    }
 }
 
-impl_builder_vec!(StringVec, Option<String>, StringArray, StringBuilder);
+impl From<BitVec> for BoolVec {
+    fn from(bitvec: BitVec) -> Self {
+        Self {
+            len: bitvec.len(),
+            data: bitvec,
+            validity: None,
+        }
+    }
+}
 
-impl_builder_vec!(BinaryVec, Option<Vec<u8>>, BinaryArray, BinaryBuilder);
+// ========== String Vector ==========
+
+pub struct StringVec {
+    pub data: Vec<u8>,        // Flat storage of all string bytes
+    pub offsets: Vec<i32>,    // Offset boundaries for each string
+    pub validity: Option<BitVec>,
+    pub len: usize,
+}
+
+impl StringVec {
+    pub fn from_vec(vec: Vec<Option<String>>) -> Self {
+        let len = vec.len();
+        let mut data = Vec::new();
+        let mut offsets = Vec::with_capacity(len + 1);
+        offsets.push(0);
+        let mut validity: Option<BitVec> = None;
+
+        for opt in vec {
+            match opt {
+                Some(s) => {
+                    data.extend_from_slice(s.as_bytes());
+                    offsets.push(data.len() as i32);
+                    if let Some(n) = validity.as_mut() {
+                        n.push(true);
+                    }
+                }
+                None => {
+                    // For null values, offset stays the same (empty string)
+                    offsets.push(data.len() as i32);
+                    if validity.is_none() {
+                        let mut n = BitVec::from_elem(offsets.len() - 2, true);
+                        n.push(false);
+                        validity = Some(n);
+                    } else {
+                        validity.as_mut().unwrap().push(false);
+                    }
+                }
+            }
+        }
+
+        Self {
+            data,
+            offsets,
+            validity,
+            len,
+        }
+    }
+}
+
+impl NativeArray for StringVec {
+    type Item = Option<String>;
+    type ItemRef = Option<String>;
+    type ArrowArray = StringArray;
+
+    fn push(&mut self, item: Self::Item) {
+        match item {
+            Some(s) => {
+                self.data.extend_from_slice(s.as_bytes());
+                self.offsets.push(self.data.len() as i32);
+                if let Some(n) = self.validity.as_mut() {
+                    n.push(true);
+                }
+            }
+            None => {
+                self.offsets.push(self.data.len() as i32);
+                if self.validity.is_none() {
+                    let mut n = BitVec::from_elem(self.len, true);
+                    n.push(false);
+                    self.validity = Some(n);
+                } else {
+                    self.validity.as_mut().unwrap().push(false);
+                }
+            }
+        }
+        self.len += 1;
+    }
+
+    fn get(&self, idx: usize) -> Self::ItemRef {
+        if idx >= self.len {
+            None
+        } else {
+            match &self.validity {
+                Some(validity) if !validity[idx] => None,
+                _ => {
+                    let start = self.offsets[idx] as usize;
+                    let end = self.offsets[idx + 1] as usize;
+                    let bytes = &self.data[start..end];
+                    Some(String::from_utf8_lossy(bytes).into_owned())
+                }
+            }
+        }
+    }
+
+    fn to_arrow_array(&self) -> Self::ArrowArray {
+        let offsets_buffer = OffsetBuffer::new(self.offsets.clone().into());
+        let values_buffer = Buffer::from_vec(self.data.clone());
+        
+        let validity = self.validity.as_ref().map(|validity| {
+            NullBuffer::from_iter(validity.iter())
+        });
+        
+        StringArray::new(offsets_buffer, values_buffer, validity)
+    }
+}
+
+impl From<Vec<Option<String>>> for StringVec {
+    fn from(vec: Vec<Option<String>>) -> Self {
+        Self::from_vec(vec)
+    }
+}
+
+impl From<Vec<String>> for StringVec {
+    fn from(vec: Vec<String>) -> Self {
+        let len = vec.len();
+        let mut data = Vec::new();
+        let mut offsets = Vec::with_capacity(len + 1);
+        offsets.push(0);
+
+        for s in vec {
+            data.extend_from_slice(s.as_bytes());
+            offsets.push(data.len() as i32);
+        }
+
+        Self {
+            data,
+            offsets,
+            validity: None,
+            len,
+        }
+    }
+}
+
+// ========== Binary Vector ==========
+
+pub struct BinaryVec {
+    pub data: Vec<u8>,        // Flat storage of all binary data
+    pub offsets: Vec<i32>,    // Offset boundaries for each binary blob
+    pub validity: Option<BitVec>,
+    pub len: usize,
+}
+
+impl BinaryVec {
+    pub fn from_vec(vec: Vec<Option<Vec<u8>>>) -> Self {
+        let len = vec.len();
+        let mut data = Vec::new();
+        let mut offsets = Vec::with_capacity(len + 1);
+        offsets.push(0);
+        let mut validity: Option<BitVec> = None;
+
+        for opt in vec {
+            match opt {
+                Some(bytes) => {
+                    data.extend_from_slice(&bytes);
+                    offsets.push(data.len() as i32);
+                    if let Some(n) = validity.as_mut() {
+                        n.push(true);
+                    }
+                }
+                None => {
+                    // For null values, offset stays the same (empty binary)
+                    offsets.push(data.len() as i32);
+                    if validity.is_none() {
+                        let mut n = BitVec::from_elem(offsets.len() - 2, true);
+                        n.push(false);
+                        validity = Some(n);
+                    } else {
+                        validity.as_mut().unwrap().push(false);
+                    }
+                }
+            }
+        }
+
+        Self {
+            data,
+            offsets,
+            validity,
+            len,
+        }
+    }
+}
+
+impl NativeArray for BinaryVec {
+    type Item = Option<Vec<u8>>;
+    type ItemRef = Option<Vec<u8>>;
+    type ArrowArray = BinaryArray;
+
+    fn push(&mut self, item: Self::Item) {
+        match item {
+            Some(bytes) => {
+                self.data.extend_from_slice(&bytes);
+                self.offsets.push(self.data.len() as i32);
+                if let Some(n) = self.validity.as_mut() {
+                    n.push(true);
+                }
+            }
+            None => {
+                self.offsets.push(self.data.len() as i32);
+                if self.validity.is_none() {
+                    let mut n = BitVec::from_elem(self.len, true);
+                    n.push(false);
+                    self.validity = Some(n);
+                } else {
+                    self.validity.as_mut().unwrap().push(false);
+                }
+            }
+        }
+        self.len += 1;
+    }
+
+    fn get(&self, idx: usize) -> Self::ItemRef {
+        if idx >= self.len {
+            None
+        } else {
+            match &self.validity {
+                Some(validity) if !validity[idx] => None,
+                _ => {
+                    let start = self.offsets[idx] as usize;
+                    let end = self.offsets[idx + 1] as usize;
+                    Some(self.data[start..end].to_vec())
+                }
+            }
+        }
+    }
+
+    fn to_arrow_array(&self) -> Self::ArrowArray {
+        let offsets_buffer = OffsetBuffer::new(self.offsets.clone().into());
+        let values_buffer = Buffer::from_vec(self.data.clone());
+        
+        let validity = self.validity.as_ref().map(|validity| {
+            NullBuffer::from_iter(validity.iter())
+        });
+        
+        BinaryArray::new(offsets_buffer, values_buffer, validity)
+    }
+}
+
+impl From<Vec<Option<Vec<u8>>>> for BinaryVec {
+    fn from(vec: Vec<Option<Vec<u8>>>) -> Self {
+        Self::from_vec(vec)
+    }
+}
+
+impl From<Vec<Vec<u8>>> for BinaryVec {
+    fn from(vec: Vec<Vec<u8>>) -> Self {
+        let len = vec.len();
+        let mut data = Vec::new();
+        let mut offsets = Vec::with_capacity(len + 1);
+        offsets.push(0);
+
+        for bytes in vec {
+            data.extend_from_slice(&bytes);
+            offsets.push(data.len() as i32);
+        }
+
+        Self {
+            data,
+            offsets,
+            validity: None,
+            len,
+        }
+    }
+}
 
 // ========== Decimal128 Vector ==========
 
@@ -276,15 +593,61 @@ pub struct Decimal128Value {
     pub scale: i8,
 }
 pub struct Decimal128Vec {
-    pub data: Vec<Option<Decimal128Value>>,
+    pub data: Vec<i128>,
+    pub validity: Option<BitVec>,
     pub len: usize,
+    pub precision: u8,
+    pub scale: i8,
 }
 
 impl Decimal128Vec {
+    /// Create from Vec<Option<Decimal128Value>>
     pub fn from_vec(vec: Vec<Option<Decimal128Value>>) -> Self {
+        if vec.is_empty() {
+            return Self {
+                data: Vec::new(),
+                validity: None,
+                len: 0,
+                precision: 0xFF,
+                scale: 0,
+            }
+        }
+
+        let first = vec.iter().find_map(|v| *v).expect("At least one non-null value required");
+        let precision = first.precision;
+        let scale = first.scale;
+
+        let len = vec.len();
+        let mut data = Vec::with_capacity(len);
+        let mut validity: Option<BitVec> = None;
+
+        for opt in vec {
+            match opt {
+                Some(v) => {
+                    data.push(v.value);
+                    if let Some(n) = validity.as_mut() {
+                        n.push(true);
+                    }
+                }
+                None => {
+                    data.push(0); // dummy slot
+                    if validity.is_none() {
+                        let mut n = BitVec::from_elem(data.len() - 1, true);
+                        n.push(false);
+                        validity = Some(n);
+                    } else {
+                        validity.as_mut().unwrap().push(false);
+                    }
+                }
+            }
+        }
+
         Self {
-            len: vec.len(),
-            data: vec,
+            data,
+            validity,
+            len,
+            precision,
+            scale,
         }
     }
 }
@@ -295,49 +658,64 @@ impl NativeArray for Decimal128Vec {
     type ArrowArray = Decimal128Array;
 
     fn push(&mut self, item: Self::Item) {
+        match item {
+            Some(v) => {
+                if self.precision == 0xFF {
+                    self.precision = v.precision;
+                    self.scale = v.scale;
+                }
+                self.data.push(v.value);
+                if let Some(validity) = self.validity.as_mut() {
+                    validity.push(true);
+                }
+            }
+            None => {
+                self.data.push(0); // dummy
+                if self.validity.is_none() {
+                    let mut n = BitVec::from_elem(self.len, true); 
+                    n.push(false);
+                    self.validity = Some(n);
+                } else {
+                    self.validity.as_mut().unwrap().push(false);
+                }
+            }
+        }
         self.len += 1;
-        self.data.push(item);
     }
 
     fn get(&self, idx: usize) -> Self::ItemRef {
         if idx >= self.len {
             None
         } else {
-            self.data[idx]
+            match &self.validity {
+                Some(validity) if !validity[idx] => None,
+                _ => Some(Decimal128Value {
+                    value: self.data[idx],
+                    precision: self.precision,
+                    scale: self.scale,
+                }),
+            }
         }
     }
 
     fn to_arrow_array(&self) -> Self::ArrowArray {
-        if self.data.is_empty() {
-            return Decimal128Array::from(vec![] as Vec<Option<i128>>)
-                .with_precision_and_scale(10, 0)
-                .unwrap();
-        }
+        let buffer = Buffer::from_slice_ref(&self.data);
+        let validity = self.validity.as_ref().map(|validity| {
+            arrow::buffer::NullBuffer::from_iter(validity.iter())
+        });
 
-        let precision = self.data[0].unwrap().precision;
-        let scale = self.data[0].unwrap().scale;
-        let values: Vec<Option<i128>> = self
-            .data
-            .clone()
-            .into_iter()
-            .map(|d| if let Some(d) = d {
-                Some(d.value)
-            } else {
-                None
-            })
-            .collect();
-
-        Decimal128Array::from(values)
-            .with_precision_and_scale(precision, scale)
+        Decimal128Array::new(buffer.into(), validity)
+            .with_precision_and_scale(self.precision.into(), self.scale)
             .unwrap()
     }
 }
 
-impl From<Vec<Decimal128Value>> for Decimal128Vec {
-    fn from(vec: Vec<Decimal128Value>) -> Self {
-        Decimal128Vec::from_vec(vec.into_iter().map(|x| Some(x)).collect())
+impl From<Vec<Option<Decimal128Value>>> for Decimal128Vec {
+    fn from(vec: Vec<Option<Decimal128Value>>) -> Self {
+        Self::from_vec(vec)
     }
 }
+
 
 // ========== TESTS =============
 
@@ -427,16 +805,16 @@ mod tests {
     #[test]
     fn test_decimal128() {
         let decimal_values = vec![
-            Decimal128Value {
+            Some(Decimal128Value {
                 value: 12345,
                 precision: 10,
                 scale: 2,
-            },
-            Decimal128Value {
+            }),
+            Some(Decimal128Value {
                 value: 67890,
                 precision: 10,
                 scale: 2,
-            },
+            }),
         ];
         let decimal_vec = Decimal128Vec::from(decimal_values);
         let arrow_array = decimal_vec.to_arrow_array();
