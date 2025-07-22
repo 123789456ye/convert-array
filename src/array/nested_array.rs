@@ -26,7 +26,7 @@ where
 pub struct ListVec<T> {
     pub data: Vec<T>, // Flat storage of all elements
     pub field: Field,
-    pub offsets: Vec<i32>,             // Offset boundaries for each list
+    pub offsets: Vec<i32>,        // Offset boundaries for each list
     pub validity: Option<BitVec>, // Lazy allocation like Arrow (true = not null)
     pub len: usize,
 }
@@ -123,9 +123,10 @@ where
         let values_array = dynscalar_vec_to_array(values, self.field.data_type());
         let offsets_buffer = OffsetBuffer::new(self.offsets.clone().into());
 
-        let validity = self.validity.as_ref().map(|validity| {
-            arrow::buffer::NullBuffer::from_iter(validity.iter())
-        });
+        let validity = self
+            .validity
+            .as_ref()
+            .map(|validity| arrow::buffer::NullBuffer::from_iter(validity.iter()));
 
         ListArray::new(
             Arc::new(self.field.clone()),
@@ -289,9 +290,10 @@ where
 
         let offsets_buffer = OffsetBuffer::new(self.offsets.clone().into());
 
-        let validity = self.validity.as_ref().map(|validity| {
-            arrow::buffer::NullBuffer::from_iter(validity.iter())
-        });
+        let validity = self
+            .validity
+            .as_ref()
+            .map(|validity| arrow::buffer::NullBuffer::from_iter(validity.iter()));
 
         let entries_field = Field::new(
             "entries",
@@ -435,9 +437,10 @@ where
         let values = self.data.iter().map(|x| x.clone().into()).collect();
         let values_array = dynscalar_vec_to_array(values, self.field.data_type());
 
-        let validity = self.validity.as_ref().map(|validity| {
-            arrow::buffer::NullBuffer::from_iter(validity.iter())
-        });
+        let validity = self
+            .validity
+            .as_ref()
+            .map(|validity| arrow::buffer::NullBuffer::from_iter(validity.iter()));
 
         arrow::array::FixedSizeListArray::new(
             Arc::new(self.field.clone()),
@@ -454,7 +457,7 @@ where
 /// Stores rows as HashMaps and converts them to Arrow StructArray format.
 pub struct StructVec {
     pub rows: Vec<HashMap<String, DynScalar>>, // Dense storage, undefined for nulls
-    pub validity: Option<BitVec>,         // Only allocate if nulls exist (Arrow pattern)
+    pub validity: Option<BitVec>,              // Only allocate if nulls exist (Arrow pattern)
     pub schema: Schema,
     pub len: usize,
 }
@@ -580,9 +583,10 @@ impl NativeArray for StructVec {
             );
         }
 
-        let validity = self.validity.as_ref().map(|validity| {
-            arrow::buffer::NullBuffer::from_iter(validity.iter())
-        });
+        let validity = self
+            .validity
+            .as_ref()
+            .map(|validity| arrow::buffer::NullBuffer::from_iter(validity.iter()));
 
         StructArray::new(self.schema.fields().clone(), field_arrays, validity)
     }
@@ -877,7 +881,7 @@ mod tests {
             Field::new("age", DataType::Int32, false),
             Field::new("email", DataType::Utf8, true), // nullable
         ];
-        let _schema = Schema::new(fields.clone());
+        let schema = Schema::new(fields.clone());
 
         // Create test data
         let people = vec![
@@ -904,7 +908,6 @@ mod tests {
             Field::new("age", DataType::Int32, false),
             Field::new("email", DataType::Utf8, true),
         ];
-        let _schema2 = Schema::new(fields.clone());
 
         // Convert using SchemaConvertible
         //let converted = convert_vector_with_schema(&people, &_schema);
@@ -929,7 +932,79 @@ mod tests {
             ]));
 
             StructArray::new(
-                _schema.fields().clone(),
+                schema.fields().clone(),
+                vec![id_array, age_array, email_array],
+                None,
+            )
+        };
+
+        // Assert equality
+        assert_eq!(arrow_array.to_data(), expected.to_data());
+        assert_eq!(arrow_array.len(), expected.len());
+        assert_eq!(arrow_array.data_type(), expected.data_type());
+    }
+
+    #[test]
+    fn test_struct_as_map() {
+        /* struct Person {
+            name: String,
+            age: i32,
+            email: Option<String>,
+        } */
+
+        let fields = vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("age", DataType::Int32, false),
+            Field::new("email", DataType::Utf8, true),
+        ];
+        let schema = Schema::new(fields.clone());
+
+        let people: Vec<HashMap<String, DynScalar>> = vec![
+            {
+                let mut person = HashMap::new();
+                person.insert("name".to_string(), DynScalar::String("Alice".to_string()));
+                person.insert("age".to_string(), DynScalar::Int32(30));
+                person.insert(
+                    "email".to_string(),
+                    DynScalar::String("alice@example.com".to_string()),
+                );
+                person
+            },
+            {
+                let mut person = HashMap::new();
+                person.insert("name".to_string(), DynScalar::String("Bob".to_string()));
+                person.insert("age".to_string(), DynScalar::Int32(25));
+                person
+            },
+            {
+                let mut person = HashMap::new();
+                person.insert("name".to_string(), DynScalar::String("Charlie".to_string()));
+                person.insert("age".to_string(), DynScalar::Int32(35));
+                person.insert(
+                    "email".to_string(),
+                    DynScalar::String("charlie@example.com".to_string()),
+                );
+                person
+            },
+        ];
+
+        let converted: Vec<DynScalar> = people.into_iter().map(|x| DynScalar::Struct(x)).collect();
+        let arrow_array =
+            dynscalar_vec_to_array(converted, &DataType::Struct(fields.clone().into()));
+
+        let expected = {
+            let id_array = Arc::new(arrow::array::StringArray::from(vec![
+                "Alice", "Bob", "Charlie",
+            ]));
+            let age_array = Arc::new(arrow::array::Int32Array::from(vec![30, 25, 35]));
+            let email_array = Arc::new(arrow::array::StringArray::from(vec![
+                Some("alice@example.com"),
+                None,
+                Some("charlie@example.com"),
+            ]));
+
+            StructArray::new(
+                schema.fields().clone(),
                 vec![id_array, age_array, email_array],
                 None,
             )
