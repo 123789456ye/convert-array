@@ -56,7 +56,7 @@ macro_rules! impl_dynnativearray_for_primitive {
                 fn get(&self, index: usize) -> Option<DynScalar> {
                     let res = <Self as NativeArray>::get(self, index);
                     if let Some(res) = res {
-                        Some(DynScalar::$dyn_variant(res))
+                        Some(DynScalar::$dyn_variant(*res))
                     } else {
                         None
                     }
@@ -100,7 +100,7 @@ macro_rules! impl_dynnativearray_for_time {
                 fn get(&self, index: usize) -> Option<DynScalar> {
                     let res = <Self as NativeArray>::get(self, index);
                     if let Some(res) = res {
-                        Some(DynScalar::$dyn_variant(<$native_type>::from(res)))
+                        Some(DynScalar::$dyn_variant(<$native_type>::from(*res)))
                     } else {
                         None
                     }
@@ -142,7 +142,7 @@ impl DynNativeArray<Option<String>> for StringVec {
     fn get(&self, index: usize) -> Option<DynScalar> {
         let res = <Self as NativeArray>::get(self, index);
         if let Some(res) = res {
-            Some(DynScalar::String(res))
+            Some(DynScalar::String((*res).to_string()))
         } else {
             None
         }
@@ -178,7 +178,7 @@ impl DynNativeArray<Option<Vec<u8>>> for BinaryVec {
     fn get(&self, index: usize) -> Option<DynScalar> {
         let res = <Self as NativeArray>::get(self, index);
         if let Some(res) = res {
-            Some(DynScalar::Binary(res))
+            Some(DynScalar::Binary((*res).to_vec()))
         } else {
             None
         }
@@ -214,7 +214,7 @@ impl DynNativeArray<Option<bool>> for BoolVec {
     fn get(&self, index: usize) -> Option<DynScalar> {
         let res = <Self as NativeArray>::get(self, index);
         if let Some(res) = res {
-            Some(DynScalar::Bool(res))
+            Some(DynScalar::Bool(*res))
         } else {
             None
         }
@@ -250,7 +250,7 @@ impl DynNativeArray<Option<Decimal128Value>> for Decimal128Vec {
     fn get(&self, index: usize) -> Option<DynScalar> {
         let res = <Self as NativeArray>::get(self, index);
         if let Some(res) = res {
-            Some(DynScalar::Decimal128(res))
+            Some(DynScalar::Decimal128(*res))
         } else {
             None
         }

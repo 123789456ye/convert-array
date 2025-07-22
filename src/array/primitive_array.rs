@@ -1,4 +1,4 @@
-use std::u8;
+use std::{u8};
 
 use arrow::array::{
     Array, ArrowPrimitiveType, BinaryArray, BooleanArray,
@@ -13,15 +13,15 @@ use crate::for_all_primitivetype;
 
 /// Trait for native array implementations that can be converted to Arrow arrays.
 /// Provides methods for manipulating arrays and converting them to Arrow format.
-pub trait NativeArray: 'static {
+pub trait NativeArray {
     type Item;
-    type ItemRef;
+    type ItemRef<'a> where Self: 'a;
     type ArrowArray: Array;
 
     /// Adds an item to the array.
     fn push(&mut self, item: Self::Item);
     /// Gets a reference to the item at the specified index.
-    fn get(&self, index: usize) -> Self::ItemRef;
+    fn get(&self, index: usize) -> Self::ItemRef<'_>;
     /// Converts this native array to an Arrow array.
     fn to_arrow_array(&self) -> Self::ArrowArray;
 }
@@ -78,7 +78,7 @@ where
     PrimitiveArray<P>: From<Vec<Option<P::Native>>>,
 {
     type Item = Option<P::Native>;
-    type ItemRef = Option<P::Native>;
+    type ItemRef<'a> = Option<&'a P::Native> where P: 'a;
     type ArrowArray = PrimitiveArray<P>;
 
     fn push(&mut self, v: Self::Item) {
@@ -103,13 +103,13 @@ where
         self.len += 1;
     }
 
-    fn get(&self, idx: usize) -> Self::ItemRef {
+    fn get(&self, idx: usize) -> Self::ItemRef<'_> {
         if idx >= self.len {
             None
         } else {
             match &self.validity {
                 Some(validity) if !validity[idx] => None,
-                _ => Some(self.data[idx]),
+                _ => Some(&self.data[idx]),
             }
         }
     }
@@ -248,7 +248,7 @@ impl BoolVec {
 
 impl NativeArray for BoolVec {
     type Item = Option<bool>;
-    type ItemRef = Option<bool>;
+    type ItemRef<'a> = Option<&'a bool>;
     type ArrowArray = BooleanArray;
 
     fn push(&mut self, item: Self::Item) {
@@ -273,13 +273,13 @@ impl NativeArray for BoolVec {
         self.len += 1;
     }
 
-    fn get(&self, idx: usize) -> Self::ItemRef {
+    fn get(&self, idx: usize) -> Self::ItemRef<'_> {
         if idx >= self.len {
             None
         } else {
             match &self.validity {
                 Some(n) if !n[idx] => None,
-                _ => Some(self.data[idx]),
+                _ => Some(&self.data[idx]),
             }
         }
     }
@@ -371,7 +371,7 @@ impl StringVec {
 
 impl NativeArray for StringVec {
     type Item = Option<String>;
-    type ItemRef = Option<String>;
+    type ItemRef<'a> = Option<&'a str>;
     type ArrowArray = StringArray;
 
     fn push(&mut self, item: Self::Item) {
@@ -397,7 +397,7 @@ impl NativeArray for StringVec {
         self.len += 1;
     }
 
-    fn get(&self, idx: usize) -> Self::ItemRef {
+    fn get(&self, idx: usize) -> Self::ItemRef<'_> {
         if idx >= self.len {
             None
         } else {
@@ -407,7 +407,7 @@ impl NativeArray for StringVec {
                     let start = self.offsets[idx] as usize;
                     let end = self.offsets[idx + 1] as usize;
                     let bytes = &self.data[start..end];
-                    Some(String::from_utf8_lossy(bytes).into_owned())
+                    Some(std::str::from_utf8(bytes).unwrap())
                 }
             }
         }
@@ -503,7 +503,7 @@ impl BinaryVec {
 
 impl NativeArray for BinaryVec {
     type Item = Option<Vec<u8>>;
-    type ItemRef = Option<Vec<u8>>;
+    type ItemRef<'a> = Option<&'a [u8]>;
     type ArrowArray = BinaryArray;
 
     fn push(&mut self, item: Self::Item) {
@@ -529,7 +529,7 @@ impl NativeArray for BinaryVec {
         self.len += 1;
     }
 
-    fn get(&self, idx: usize) -> Self::ItemRef {
+    fn get(&self, idx: usize) -> Self::ItemRef<'_> {
         if idx >= self.len {
             None
         } else {
@@ -538,7 +538,7 @@ impl NativeArray for BinaryVec {
                 _ => {
                     let start = self.offsets[idx] as usize;
                     let end = self.offsets[idx + 1] as usize;
-                    Some(self.data[start..end].to_vec())
+                    Some(&self.data[start..end])
                 }
             }
         }
@@ -586,37 +586,21 @@ impl From<Vec<Vec<u8>>> for BinaryVec {
 // ========== Decimal128 Vector ==========
 
 /// A vector for storing Decimal128 values with precision and scale.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Decimal128Value {
     pub value: i128,
     pub precision: u8,
     pub scale: i8,
 }
 pub struct Decimal128Vec {
-    pub data: Vec<i128>,
+    pub data: Vec<Decimal128Value>,
     pub validity: Option<BitVec>,
     pub len: usize,
-    pub precision: u8,
-    pub scale: i8,
 }
 
 impl Decimal128Vec {
     /// Create from Vec<Option<Decimal128Value>>
     pub fn from_vec(vec: Vec<Option<Decimal128Value>>) -> Self {
-        if vec.is_empty() {
-            return Self {
-                data: Vec::new(),
-                validity: None,
-                len: 0,
-                precision: 0xFF,
-                scale: 0,
-            }
-        }
-
-        let first = vec.iter().find_map(|v| *v).expect("At least one non-null value required");
-        let precision = first.precision;
-        let scale = first.scale;
-
         let len = vec.len();
         let mut data = Vec::with_capacity(len);
         let mut validity: Option<BitVec> = None;
@@ -624,13 +608,13 @@ impl Decimal128Vec {
         for opt in vec {
             match opt {
                 Some(v) => {
-                    data.push(v.value);
+                    data.push(v);
                     if let Some(n) = validity.as_mut() {
                         n.push(true);
                     }
                 }
                 None => {
-                    data.push(0); // dummy slot
+                    data.push(Default::default()); // dummy slot
                     if validity.is_none() {
                         let mut n = BitVec::from_elem(data.len() - 1, true);
                         n.push(false);
@@ -646,31 +630,25 @@ impl Decimal128Vec {
             data,
             validity,
             len,
-            precision,
-            scale,
         }
     }
 }
 
 impl NativeArray for Decimal128Vec {
     type Item = Option<Decimal128Value>;
-    type ItemRef = Option<Decimal128Value>;
+    type ItemRef<'a> = Option<&'a Decimal128Value>;
     type ArrowArray = Decimal128Array;
 
     fn push(&mut self, item: Self::Item) {
         match item {
             Some(v) => {
-                if self.precision == 0xFF {
-                    self.precision = v.precision;
-                    self.scale = v.scale;
-                }
-                self.data.push(v.value);
+                self.data.push(v);
                 if let Some(validity) = self.validity.as_mut() {
                     validity.push(true);
                 }
             }
             None => {
-                self.data.push(0); // dummy
+                self.data.push(Default::default()); // dummy
                 if self.validity.is_none() {
                     let mut n = BitVec::from_elem(self.len, true); 
                     n.push(false);
@@ -683,30 +661,35 @@ impl NativeArray for Decimal128Vec {
         self.len += 1;
     }
 
-    fn get(&self, idx: usize) -> Self::ItemRef {
+    fn get(&self, idx: usize) -> Self::ItemRef<'_> {
         if idx >= self.len {
             None
         } else {
             match &self.validity {
                 Some(validity) if !validity[idx] => None,
-                _ => Some(Decimal128Value {
-                    value: self.data[idx],
-                    precision: self.precision,
-                    scale: self.scale,
-                }),
+                _ => Some(&self.data[idx]),
             }
         }
     }
 
     fn to_arrow_array(&self) -> Self::ArrowArray {
-        let buffer = Buffer::from_slice_ref(&self.data);
+        let first = self.data.iter().find(|v| v.precision != 0);
+
+        let (precision, scale) = match first {
+            Some(v) => (v.precision, v.scale),
+            None => return Decimal128Array::from(vec![] as Vec<Option<i128>>)
+            .with_precision_and_scale(10, 0)
+            .unwrap(),
+        };
+
+        let values: Vec<i128> = self.data.iter().map(|v| v.value).collect();
+        let buffer = Buffer::from_slice_ref(&values);
+
         let validity = self.validity.as_ref().map(|validity| {
-            arrow::buffer::NullBuffer::from_iter(validity.iter())
+            NullBuffer::from_iter(validity.iter())
         });
 
-        Decimal128Array::new(buffer.into(), validity)
-            .with_precision_and_scale(self.precision.into(), self.scale)
-            .unwrap()
+        Decimal128Array::new(buffer.into(), validity).with_precision_and_scale(precision, scale).unwrap()
     }
 }
 
@@ -780,7 +763,7 @@ mod tests {
     fn test_bool_vec() {
         let mut bool_vec = BoolVec::from_vec(vec![Some(true), Some(false), Some(true)]);
         bool_vec.push(Some(false));
-        assert_eq!(bool_vec.get(0), Some(true));
+        assert_eq!(bool_vec.get(0), Some(true).as_ref());
 
         let arrow_array = bool_vec.to_arrow_array();
         let expected = BooleanArray::from(vec![true, false, true, false]);
@@ -796,7 +779,7 @@ mod tests {
                 .collect(),
         );
         string_vec.push(Some("test".to_string()));
-        assert_eq!(string_vec.get(0), Some("hello".to_string()));
+        assert_eq!(string_vec.get(0), Some("hello"));
 
         let arrow_array = string_vec.to_arrow_array();
         assert_eq!(arrow_array.len(), 3);
@@ -817,6 +800,8 @@ mod tests {
             }),
         ];
         let decimal_vec = Decimal128Vec::from(decimal_values);
+        let test = decimal_vec.get(1).unwrap();
+        assert_eq!(test.value, 67890);
         let arrow_array = decimal_vec.to_arrow_array();
         assert_eq!(arrow_array.len(), 2);
         assert_eq!(
@@ -833,8 +818,8 @@ mod tests {
         typed_opt_vec.push(None);
         typed_opt_vec.push(Some(100));
 
-        assert_eq!(typed_opt_vec.get(0), Some(42));
+        assert_eq!(typed_opt_vec.get(0), Some(42).as_ref());
         assert_eq!(typed_opt_vec.get(1), None);
-        assert_eq!(typed_opt_vec.get(2), Some(100));
+        assert_eq!(typed_opt_vec.get(2), Some(100).as_ref());
     }
 }

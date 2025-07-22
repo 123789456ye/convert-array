@@ -79,7 +79,7 @@ where
     T: Clone + Into<DynScalar> + 'static,
 {
     type Item = Option<Vec<T>>;
-    type ItemRef = Option<Vec<T>>;
+    type ItemRef<'a> = Option<&'a [T]>;
     type ArrowArray = ListArray;
 
     fn push(&mut self, item: Self::Item) {
@@ -106,13 +106,13 @@ where
         self.len += 1;
     }
 
-    fn get(&self, index: usize) -> Self::ItemRef {
+    fn get(&self, index: usize) -> Self::ItemRef<'_> {
         match &self.validity {
             Some(validity) if !validity[index] => None,
             _ => {
                 let start = self.offsets[index] as usize;
                 let end = self.offsets[index + 1] as usize;
-                Some(self.data[start..end].to_vec())
+                Some(&self.data[start..end])
             }
         }
     }
@@ -226,7 +226,7 @@ where
     V: Clone + Into<DynScalar> + 'static,
 {
     type Item = Option<HashMap<K, V>>;
-    type ItemRef = Option<HashMap<K, V>>;
+    type ItemRef<'a> = Option<&'a HashMap<K, V>>;
     type ArrowArray = MapArray;
 
     fn push(&mut self, item: Self::Item) {
@@ -257,10 +257,10 @@ where
         self.len += 1;
     }
 
-    fn get(&self, index: usize) -> Self::ItemRef {
+    fn get(&self, index: usize) -> Self::ItemRef<'_> {
         match &self.validity {
             Some(validity) if !validity[index] => None,
-            _ => Some(self.data[index].clone()),
+            _ => Some(&self.data[index]),
         }
     }
 
@@ -387,7 +387,7 @@ where
     T: Clone + Into<DynScalar> + 'static,
 {
     type Item = Option<Vec<T>>;
-    type ItemRef = Option<Vec<T>>;
+    type ItemRef<'a> = Option<&'a [T]>;
     type ArrowArray = arrow::array::FixedSizeListArray;
 
     fn push(&mut self, item: Self::Item) {
@@ -421,13 +421,13 @@ where
         self.len += 1;
     }
 
-    fn get(&self, index: usize) -> Self::ItemRef {
+    fn get(&self, index: usize) -> Self::ItemRef<'_> {
         match &self.validity {
             Some(validity) if !validity[index] => None,
             _ => {
                 let start = self.offsets[index] as usize;
                 let end = self.offsets[index + 1] as usize;
-                Some(self.data[start..end].to_vec())
+                Some(&self.data[start..end])
             }
         }
     }
@@ -510,7 +510,7 @@ impl StructVec {
 
 impl NativeArray for StructVec {
     type Item = Option<HashMap<String, DynScalar>>;
-    type ItemRef = Option<HashMap<String, DynScalar>>;
+    type ItemRef<'a> = Option<&'a HashMap<String, DynScalar>>;
     type ArrowArray = StructArray;
 
     fn push(&mut self, item: Self::Item) {
@@ -541,10 +541,10 @@ impl NativeArray for StructVec {
         self.len += 1;
     }
 
-    fn get(&self, index: usize) -> Self::ItemRef {
+    fn get(&self, index: usize) -> Self::ItemRef<'_> {
         match &self.validity {
             Some(validity) if !validity[index] => None,
-            _ => Some(self.rows[index].clone()),
+            _ => Some(&self.rows[index]),
         }
     }
 
@@ -695,8 +695,8 @@ mod tests {
         assert!(matches!(expected_array.data_type(), DataType::Map(_, _)));
 
         // Verify individual map entries from our implementation
-        assert_eq!(map_vec.get(0), Some(map1));
-        assert_eq!(map_vec.get(1), Some(map2));
+        assert_eq!(map_vec.get(0), Some(map1).as_ref());
+        assert_eq!(map_vec.get(1), Some(map2).as_ref());
 
         // Verify the arrays have the same structure by inspecting their content
         for i in 0..our_array.len() {
@@ -822,8 +822,8 @@ mod tests {
         assert!(matches!(expected_array.data_type(), DataType::Map(_, _)));
 
         // Verify individual map entries from our implementation
-        assert_eq!(map_vec.get(0), Some(map1));
-        assert_eq!(map_vec.get(1), Some(map2));
+        assert_eq!(map_vec.get(0), Some(map1).as_ref());
+        assert_eq!(map_vec.get(1), Some(map2).as_ref());
 
         // Verify the arrays have the same structure by inspecting their content
         for i in 0..our_array.len() {
