@@ -85,8 +85,7 @@ let list_array_with_nulls = list_vec.to_arrow_array(); // Returns ListArray with
 
 #### Struct Arrays
 ```rust
-use convert_array::array::nested_array::{StructVec, convert_vector_with_schema};
-use convert_array::register_struct;
+use convert_array::array::nested_array::StructVec;
 use arrow::datatypes::{DataType, Field, Schema};
 
 // Define your struct
@@ -105,13 +104,6 @@ let fields = vec![
     Field::new("email", DataType::Utf8, true), // nullable
 ];
 let schema = Schema::new(fields);
-
-// Register the struct with the schema using the macro
-register_struct!(Person, schema.clone(), {
-    "name" => name,
-    "age" => age,
-    "email" => email,
-});
 
 // Create and convert data
 let people = vec![

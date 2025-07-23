@@ -17,10 +17,7 @@ pub fn dynscalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> A
                 match value {
                     DynScalar::Bool(v) => builder.append_value(v),
                     DynScalar::Null => builder.append_null(),
-                    _ => panic!(
-                        "Type mismatch: expected Bool, Bool, or Null, got {:?}",
-                        value
-                    ),
+                    _ => panic!("Type mismatch: expected Bool, or Null, got {value:?}"),
                 }
             }
             Arc::new(builder.finish())
@@ -31,10 +28,7 @@ pub fn dynscalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> A
                 match value {
                     DynScalar::Int8(v) => builder.append_value(v),
                     DynScalar::Null => builder.append_null(),
-                    _ => panic!(
-                        "Type mismatch: expected Int8, Int8, or Null, got {:?}",
-                        value
-                    ),
+                    _ => panic!("Type mismatch: expected Int8, or Null, got {value:?}"),
                 }
             }
             Arc::new(builder.finish())
@@ -45,10 +39,7 @@ pub fn dynscalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> A
                 match value {
                     DynScalar::Int16(v) => builder.append_value(v),
                     DynScalar::Null => builder.append_null(),
-                    _ => panic!(
-                        "Type mismatch: expected Int16, Int16, or Null, got {:?}",
-                        value
-                    ),
+                    _ => panic!("Type mismatch: expected Int16, or Null, got {value:?}"),
                 }
             }
             Arc::new(builder.finish())
@@ -59,10 +50,7 @@ pub fn dynscalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> A
                 match value {
                     DynScalar::Int32(v) => builder.append_value(v),
                     DynScalar::Null => builder.append_null(),
-                    _ => panic!(
-                        "Type mismatch: expected Int32, Int32, or Null, got {:?}",
-                        value
-                    ),
+                    _ => panic!("Type mismatch: expected Int32, or Null, got {value:?}"),
                 }
             }
             Arc::new(builder.finish())
@@ -73,10 +61,7 @@ pub fn dynscalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> A
                 match value {
                     DynScalar::Int64(v) => builder.append_value(v),
                     DynScalar::Null => builder.append_null(),
-                    _ => panic!(
-                        "Type mismatch: expected Int64, Int64, or Null, got {:?}",
-                        value
-                    ),
+                    _ => panic!("Type mismatch: expected Int64, or Null, got {value:?}"),
                 }
             }
             Arc::new(builder.finish())
@@ -87,10 +72,7 @@ pub fn dynscalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> A
                 match value {
                     DynScalar::UInt8(v) => builder.append_value(v),
                     DynScalar::Null => builder.append_null(),
-                    _ => panic!(
-                        "Type mismatch: expected UInt8, UInt8, or Null, got {:?}",
-                        value
-                    ),
+                    _ => panic!("Type mismatch: expected UInt8, or Null, got {value:?}"),
                 }
             }
             Arc::new(builder.finish())
@@ -101,10 +83,7 @@ pub fn dynscalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> A
                 match value {
                     DynScalar::UInt16(v) => builder.append_value(v),
                     DynScalar::Null => builder.append_null(),
-                    _ => panic!(
-                        "Type mismatch: expected UInt16, UInt16, or Null, got {:?}",
-                        value
-                    ),
+                    _ => panic!("Type mismatch: expected UInt16, or Null, got {value:?}"),
                 }
             }
             Arc::new(builder.finish())
@@ -115,10 +94,7 @@ pub fn dynscalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> A
                 match value {
                     DynScalar::UInt32(v) => builder.append_value(v),
                     DynScalar::Null => builder.append_null(),
-                    _ => panic!(
-                        "Type mismatch: expected UInt32, UInt32, or Null, got {:?}",
-                        value
-                    ),
+                    _ => panic!("Type mismatch: expected UInt32, or Null, got {value:?}"),
                 }
             }
             Arc::new(builder.finish())
@@ -129,10 +105,7 @@ pub fn dynscalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> A
                 match value {
                     DynScalar::UInt64(v) => builder.append_value(v),
                     DynScalar::Null => builder.append_null(),
-                    _ => panic!(
-                        "Type mismatch: expected UInt64, UInt64, or Null, got {:?}",
-                        value
-                    ),
+                    _ => panic!("Type mismatch: expected UInt64, or Null, got {value:?}"),
                 }
             }
             Arc::new(builder.finish())
@@ -143,10 +116,7 @@ pub fn dynscalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> A
                 match value {
                     DynScalar::Float32(v) => builder.append_value(v),
                     DynScalar::Null => builder.append_null(),
-                    _ => panic!(
-                        "Type mismatch: expected Float32, Float32, or Null, got {:?}",
-                        value
-                    ),
+                    _ => panic!("Type mismatch: expected Float32, or Null, got {value:?}"),
                 }
             }
             Arc::new(builder.finish())
@@ -157,10 +127,7 @@ pub fn dynscalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> A
                 match value {
                     DynScalar::Float64(v) => builder.append_value(v),
                     DynScalar::Null => builder.append_null(),
-                    _ => panic!(
-                        "Type mismatch: expected Float64, Float64, or Null, got {:?}",
-                        value
-                    ),
+                    _ => panic!("Type mismatch: expected Float64, or Null, got {value:?}"),
                 }
             }
             Arc::new(builder.finish())
@@ -171,10 +138,7 @@ pub fn dynscalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> A
                 match value {
                     DynScalar::String(v) => builder.append_value(v),
                     DynScalar::Null => builder.append_null(),
-                    _ => panic!(
-                        "Type mismatch: expected String, String, or Null, got {:?}",
-                        value
-                    ),
+                    _ => panic!("Type mismatch: expected String, or Null, got {value:?}"),
                 }
             }
             Arc::new(builder.finish())
@@ -186,10 +150,7 @@ pub fn dynscalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> A
                 match value {
                     DynScalar::Binary(v) => builder.append_value(&v),
                     DynScalar::Null => builder.append_null(),
-                    _ => panic!(
-                        "Type mismatch: expected Binary, Binary, or Null, got {:?}",
-                        value
-                    ),
+                    _ => panic!("Type mismatch: expected Binary, or Null, got {value:?}"),
                 }
             }
             Arc::new(builder.finish())
@@ -213,10 +174,7 @@ pub fn dynscalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> A
                         offsets.push(*offsets.last().unwrap());
                         null_mask.push(false);
                     }
-                    _ => panic!(
-                        "Type mismatch: expected List, List, or Null, got {:?}",
-                        value
-                    ),
+                    _ => panic!("Type mismatch: expected List, or Null, got {value:?}"),
                 }
             }
 
@@ -246,18 +204,13 @@ pub fn dynscalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> A
                 let field_name = field.name();
                 let field_values: Vec<DynScalar> = values
                     .iter()
-                    .map(|v| match v {
-                        DynScalar::Struct(map) => {
-                            match map.get(field_name) {
-                                Some(child) => child.clone(),
-                                None => DynScalar::Null 
-                            }
+                    .map(|value| match value {
+                        DynScalar::Struct(map) => match map.get(field_name) {
+                            Some(child) => child.clone(),
+                            None => DynScalar::Null,
                         },
                         DynScalar::Null => DynScalar::Null,
-                        _ => panic!(
-                            "Type mismatch: expected Struct, Struct, or Null, got {:?}",
-                            v
-                        ),
+                        _ => panic!("Type mismatch: expected Struct, or Null, got {value:?}"),
                     })
                     .collect();
 
@@ -274,10 +227,7 @@ pub fn dynscalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> A
                     DynScalar::Null => {
                         null_mask.push(false);
                     }
-                    _ => panic!(
-                        "Type mismatch: expected Struct, Struct, or Null, got {:?}",
-                        value
-                    ),
+                    _ => panic!("Type mismatch: expected Struct, or Null, got {value:?}"),
                 }
             }
 
@@ -323,7 +273,7 @@ pub fn dynscalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> A
                         offsets.push(*offsets.last().unwrap());
                         null_mask.push(false);
                     }
-                    _ => panic!("Type mismatch: expected Map, Map, or Null, got {:?}", value),
+                    _ => panic!("Type mismatch: expected Map, or Null, got {value:?}"),
                 }
             }
 
@@ -372,10 +322,7 @@ pub fn dynscalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> A
                         }
                         null_mask.push(false);
                     }
-                    _ => panic!(
-                        "Type mismatch: expected FixedSizeList, FixedSizeList, or Null, got {:?}",
-                        value
-                    ),
+                    _ => panic!("Type mismatch: expected FixedSizeList, or Null, got {value:?}"),
                 }
             }
 
@@ -395,7 +342,7 @@ pub fn dynscalar_vec_to_array(values: Vec<DynScalar>, data_type: &DataType) -> A
             ))
         }
 
-        _ => panic!("Unsupported data type: {:?}", data_type),
+        _ => panic!("Unsupported data type: {data_type:?}"),
     }
 }
 

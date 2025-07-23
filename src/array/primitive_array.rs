@@ -1,8 +1,6 @@
-use std::{u8};
-
 use arrow::array::{
-    Array, ArrowPrimitiveType, BinaryArray, BooleanArray,
-    Decimal128Array, PrimitiveArray, StringArray,
+    Array, ArrowPrimitiveType, BinaryArray, BooleanArray, Decimal128Array, PrimitiveArray,
+    StringArray,
 };
 use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer, OffsetBuffer};
 use arrow::datatypes::*;
@@ -15,7 +13,9 @@ use crate::for_all_primitivetype;
 /// Provides methods for manipulating arrays and converting them to Arrow format.
 pub trait NativeArray {
     type Item;
-    type ItemRef<'a> where Self: 'a;
+    type ItemRef<'a>
+    where
+        Self: 'a;
     type ArrowArray: Array;
 
     /// Adds an item to the array.
@@ -53,12 +53,12 @@ impl<P: ArrowPrimitiveType> TypedVec<P> {
                 }
                 None => {
                     data.push(P::Native::default());
-                    if validity.is_none() {
+                    if let Some(validity) = &mut validity {
+                        validity.push(false);
+                    } else {
                         let mut n = BitVec::from_elem(data.len() - 1, true);
                         n.push(false);
                         validity = Some(n);
-                    } else {
-                        validity.as_mut().unwrap().push(false);
                     }
                 }
             }
@@ -78,7 +78,10 @@ where
     PrimitiveArray<P>: From<Vec<Option<P::Native>>>,
 {
     type Item = Option<P::Native>;
-    type ItemRef<'a> = Option<&'a P::Native> where P: 'a;
+    type ItemRef<'a>
+        = Option<&'a P::Native>
+    where
+        P: 'a;
     type ArrowArray = PrimitiveArray<P>;
 
     fn push(&mut self, v: Self::Item) {
@@ -116,9 +119,10 @@ where
 
     fn to_arrow_array(&self) -> Self::ArrowArray {
         let values = Buffer::from_slice_ref(&self.data);
-        let validity = self.validity.as_ref().map(|validity| {
-            arrow::buffer::NullBuffer::from_iter(validity.iter())
-        });
+        let validity = self
+            .validity
+            .as_ref()
+            .map(|validity| arrow::buffer::NullBuffer::from_iter(validity.iter()));
         PrimitiveArray::new(values.into(), validity)
     }
 }
@@ -163,19 +167,23 @@ where
         for opt in vec {
             match opt {
                 Some(v) => {
-                    data.push(<<T as ArrowTyped>::ArrowType as ArrowPrimitiveType>::Native::from(v));
+                    data.push(
+                        <<T as ArrowTyped>::ArrowType as ArrowPrimitiveType>::Native::from(v),
+                    );
                     if let Some(n) = validity.as_mut() {
                         n.push(true);
                     }
                 }
                 None => {
-                    data.push(<<T as ArrowTyped>::ArrowType as ArrowPrimitiveType>::Native::default());
-                    if validity.is_none() {
+                    data.push(
+                        <<T as ArrowTyped>::ArrowType as ArrowPrimitiveType>::Native::default(),
+                    );
+                    if let Some(validity) = &mut validity {
+                        validity.push(false);
+                    } else {
                         let mut n = BitVec::from_elem(data.len() - 1, true);
                         n.push(false);
                         validity = Some(n);
-                    } else {
-                        validity.as_mut().unwrap().push(false);
                     }
                 }
             }
@@ -188,7 +196,6 @@ where
         }
     }
 }
-
 
 pub type Int8Vec = TypedVec<Int8Type>;
 pub type Int16Vec = TypedVec<Int16Type>;
@@ -227,12 +234,12 @@ impl BoolVec {
                 }
                 None => {
                     data.push(false); // dummy
-                    if validity.is_none() {
+                    if let Some(validity) = &mut validity {
+                        validity.push(false);
+                    } else {
                         let mut n = BitVec::from_elem(data.len() - 1, true);
                         n.push(false);
                         validity = Some(n);
-                    } else {
-                        validity.as_mut().unwrap().push(false);
                     }
                 }
             }
@@ -285,17 +292,18 @@ impl NativeArray for BoolVec {
     }
 
     fn to_arrow_array(&self) -> Self::ArrowArray {
-        let values = BooleanBuffer::from_iter(self.data.clone().into_iter());
-        let validity = self.validity.as_ref().map(|validity| {
-            arrow::buffer::NullBuffer::from_iter(validity.iter())
-        });
+        let values = BooleanBuffer::from_iter(self.data.clone());
+        let validity = self
+            .validity
+            .as_ref()
+            .map(|validity| arrow::buffer::NullBuffer::from_iter(validity.iter()));
         BooleanArray::new(values, validity)
     }
 }
 
 impl From<Vec<bool>> for BoolVec {
     fn from(vec: Vec<bool>) -> Self {
-        let data = BitVec::from_iter(vec.into_iter());
+        let data = BitVec::from_iter(vec);
         Self {
             len: data.len(),
             data,
@@ -323,8 +331,8 @@ impl From<BitVec> for BoolVec {
 // ========== String Vector ==========
 
 pub struct StringVec {
-    pub data: Vec<u8>,        // Flat storage of all string bytes
-    pub offsets: Vec<i32>,    // Offset boundaries for each string
+    pub data: Vec<u8>,     // Flat storage of all string bytes
+    pub offsets: Vec<i32>, // Offset boundaries for each string
     pub validity: Option<BitVec>,
     pub len: usize,
 }
@@ -416,11 +424,12 @@ impl NativeArray for StringVec {
     fn to_arrow_array(&self) -> Self::ArrowArray {
         let offsets_buffer = OffsetBuffer::new(self.offsets.clone().into());
         let values_buffer = Buffer::from_vec(self.data.clone());
-        
-        let validity = self.validity.as_ref().map(|validity| {
-            NullBuffer::from_iter(validity.iter())
-        });
-        
+
+        let validity = self
+            .validity
+            .as_ref()
+            .map(|validity| NullBuffer::from_iter(validity.iter()));
+
         StringArray::new(offsets_buffer, values_buffer, validity)
     }
 }
@@ -455,8 +464,8 @@ impl From<Vec<String>> for StringVec {
 // ========== Binary Vector ==========
 
 pub struct BinaryVec {
-    pub data: Vec<u8>,        // Flat storage of all binary data
-    pub offsets: Vec<i32>,    // Offset boundaries for each binary blob
+    pub data: Vec<u8>,     // Flat storage of all binary data
+    pub offsets: Vec<i32>, // Offset boundaries for each binary blob
     pub validity: Option<BitVec>,
     pub len: usize,
 }
@@ -547,11 +556,12 @@ impl NativeArray for BinaryVec {
     fn to_arrow_array(&self) -> Self::ArrowArray {
         let offsets_buffer = OffsetBuffer::new(self.offsets.clone().into());
         let values_buffer = Buffer::from_vec(self.data.clone());
-        
-        let validity = self.validity.as_ref().map(|validity| {
-            NullBuffer::from_iter(validity.iter())
-        });
-        
+
+        let validity = self
+            .validity
+            .as_ref()
+            .map(|validity| NullBuffer::from_iter(validity.iter()));
+
         BinaryArray::new(offsets_buffer, values_buffer, validity)
     }
 }
@@ -650,7 +660,7 @@ impl NativeArray for Decimal128Vec {
             None => {
                 self.data.push(Default::default()); // dummy
                 if self.validity.is_none() {
-                    let mut n = BitVec::from_elem(self.len, true); 
+                    let mut n = BitVec::from_elem(self.len, true);
                     n.push(false);
                     self.validity = Some(n);
                 } else {
@@ -677,19 +687,24 @@ impl NativeArray for Decimal128Vec {
 
         let (precision, scale) = match first {
             Some(v) => (v.precision, v.scale),
-            None => return Decimal128Array::from(vec![] as Vec<Option<i128>>)
-            .with_precision_and_scale(10, 0)
-            .unwrap(),
+            None => {
+                return Decimal128Array::from(vec![] as Vec<Option<i128>>)
+                    .with_precision_and_scale(10, 0)
+                    .unwrap();
+            }
         };
 
         let values: Vec<i128> = self.data.iter().map(|v| v.value).collect();
         let buffer = Buffer::from_slice_ref(&values);
 
-        let validity = self.validity.as_ref().map(|validity| {
-            NullBuffer::from_iter(validity.iter())
-        });
+        let validity = self
+            .validity
+            .as_ref()
+            .map(|validity| NullBuffer::from_iter(validity.iter()));
 
-        Decimal128Array::new(buffer.into(), validity).with_precision_and_scale(precision, scale).unwrap()
+        Decimal128Array::new(buffer.into(), validity)
+            .with_precision_and_scale(precision, scale)
+            .unwrap()
     }
 }
 
@@ -698,7 +713,6 @@ impl From<Vec<Option<Decimal128Value>>> for Decimal128Vec {
         Self::from_vec(vec)
     }
 }
-
 
 // ========== TESTS =============
 

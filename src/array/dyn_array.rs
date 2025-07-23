@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef};
+use arrow::array::ArrayRef;
 use arrow::datatypes::*;
 use bit_vec::BitVec;
 
@@ -244,16 +244,12 @@ impl DynNativeArray<Option<Decimal128Value>> for Decimal128Vec {
                 <Self as NativeArray>::push(self, None);
                 Ok(())
             }
-            _ => Err(format!("Type mismatch")),
+            _ => Err("Type mismatch".to_string()),
         }
     }
     fn get(&self, index: usize) -> Option<DynScalar> {
         let res = <Self as NativeArray>::get(self, index);
-        if let Some(res) = res {
-            Some(DynScalar::Decimal128(*res))
-        } else {
-            None
-        }
+        res.map(|res| DynScalar::Decimal128(*res))
     }
     fn as_native_array(&self) -> &dyn Any {
         self
@@ -326,8 +322,7 @@ impl MakeDynArray for String {
     }
 }
 
-/// Conflicting with Vec<T> to List.
-///
+// Conflicting with Vec<T> to List.
 /*impl Into<DynScalar> for Vec<u8> {
     fn into(self) -> DynScalar {
         DynScalar::Binary(self)
@@ -372,7 +367,7 @@ pub trait IntoDynNativeArray {
 
 impl<T> IntoDynNativeArray for [Option<T>]
 where
-    T: Clone + Into<DynScalar> + MakeDynArray + 'static,
+    T: Clone + Into<DynScalar> + MakeDynArray,
 {
     type Elem = T;
     fn to_dyn_array(&self) -> Result<Box<dyn DynNativeArray<Option<T>>>, String> {
@@ -410,7 +405,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Array, ArrayRef, BooleanArray, Decimal128Array, Int32Array, TimestampSecondArray};
+    use arrow::array::{
+        Array, ArrayRef, BooleanArray, Decimal128Array, Int32Array, TimestampSecondArray,
+    };
     use bit_vec::BitVec;
 
     use crate::array::primitive_array::Decimal128Value;
@@ -541,7 +538,12 @@ mod tests {
                 .with_precision_and_scale(10, 2)
                 .unwrap(),
         );
-        println!("arr: {:?}, {:?}, {:?}", arr.is_null(0), arr.is_null(1), arr.is_null(2));
+        println!(
+            "arr: {:?}, {:?}, {:?}",
+            arr.is_null(0),
+            arr.is_null(1),
+            arr.is_null(2)
+        );
         assert_eq!(arr.values(), expected.values());
         assert_eq!(arr.precision(), expected.precision());
         assert_eq!(arr.scale(), expected.scale());

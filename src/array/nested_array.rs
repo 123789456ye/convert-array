@@ -597,7 +597,6 @@ impl NativeArray for StructVec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    //use crate::register_struct;
     use arrow::array::*;
     use derive::IntoArrowArray;
     use derive_dynscalar::IntoDynScalar;
@@ -909,12 +908,6 @@ mod tests {
             Field::new("email", DataType::Utf8, true),
         ];
 
-        // Convert using SchemaConvertible
-        //let converted = convert_vector_with_schema(&people, &_schema);
-        //let converted = Vec::new();
-
-        // Convert to StructVec and then to Arrow array
-        //let struct_vec = StructVec::from_vec_with_schema(converted.clone(), _schema.clone());
         let converted: Vec<DynScalar> = people.into_iter().map(|x| x.into()).collect();
         let arrow_array =
             dynscalar_vec_to_array(converted, &DataType::Struct(fields.clone().into()));
