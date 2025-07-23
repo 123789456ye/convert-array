@@ -418,9 +418,9 @@ mod tests {
             .downcast_ref::<arrow::array::BooleanArray>()
             .unwrap();
         assert_eq!(bool_array.len(), 4);
-        assert_eq!(bool_array.value(0), true);
+        assert!(bool_array.value(0));
         assert!(bool_array.is_null(1));
-        assert_eq!(bool_array.value(2), false);
+        assert!(!bool_array.value(2));
         assert!(bool_array.is_null(3));
     }
 

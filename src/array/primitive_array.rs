@@ -357,12 +357,12 @@ impl StringVec {
                 None => {
                     // For null values, offset stays the same (empty string)
                     offsets.push(data.len() as i32);
-                    if validity.is_none() {
+                    if let Some(validity) = &mut validity {
+                        validity.push(false);
+                    } else {
                         let mut n = BitVec::from_elem(offsets.len() - 2, true);
                         n.push(false);
                         validity = Some(n);
-                    } else {
-                        validity.as_mut().unwrap().push(false);
                     }
                 }
             }
@@ -490,12 +490,12 @@ impl BinaryVec {
                 None => {
                     // For null values, offset stays the same (empty binary)
                     offsets.push(data.len() as i32);
-                    if validity.is_none() {
+                    if let Some(validity) = &mut validity {
+                        validity.push(false);
+                    } else {
                         let mut n = BitVec::from_elem(offsets.len() - 2, true);
                         n.push(false);
                         validity = Some(n);
-                    } else {
-                        validity.as_mut().unwrap().push(false);
                     }
                 }
             }
@@ -625,12 +625,12 @@ impl Decimal128Vec {
                 }
                 None => {
                     data.push(Default::default()); // dummy slot
-                    if validity.is_none() {
+                    if let Some(validity) = &mut validity {
+                        validity.push(false);
+                    } else {
                         let mut n = BitVec::from_elem(data.len() - 1, true);
                         n.push(false);
                         validity = Some(n);
-                    } else {
-                        validity.as_mut().unwrap().push(false);
                     }
                 }
             }
@@ -725,7 +725,7 @@ mod tests {
     fn test_i32_nativearray_to_arrowarray_eq() {
         let data: Vec<Option<i32>> = vec![1i32, 2, 3, 4, 5, -10, 100]
             .into_iter()
-            .map(|x| Some(x))
+            .map(Some)
             .collect();
         let native: Int32Vec = data.clone().into();
         let arrow_from_native = native.to_arrow_array();
@@ -737,7 +737,7 @@ mod tests {
     fn test_f64_nativearray_to_arrowarray_eq() {
         let data: Vec<Option<f64>> = vec![1.0f64, 3.14, 2.72, -7.618, 42.0]
             .into_iter()
-            .map(|x| Some(x))
+            .map(Some)
             .collect();
         let native: Float64Vec = data.clone().into();
         let arrow_from_native = native.to_arrow_array();
@@ -749,7 +749,7 @@ mod tests {
     fn test_string_nativearray() {
         let data: Vec<Option<String>> = vec!["abc".to_string(), "def".to_string()]
             .into_iter()
-            .map(|x| Some(x))
+            .map(Some)
             .collect();
         let array = StringVec::from(data.clone()).to_arrow_array();
         let refdata = StringArray::from(data);
@@ -760,7 +760,7 @@ mod tests {
     fn test_binary_nativearray() {
         let data: Vec<Option<Vec<u8>>> = vec![b"abc".to_vec(), b"def".to_vec()]
             .into_iter()
-            .map(|x| Some(x))
+            .map(Some)
             .collect();
         let array = BinaryVec::from(data.clone()).to_arrow_array();
         let refdata = {
@@ -789,7 +789,7 @@ mod tests {
         let mut string_vec = StringVec::from_vec(
             vec!["hello".to_string(), "world".to_string()]
                 .into_iter()
-                .map(|x| Some(x))
+                .map(Some)
                 .collect(),
         );
         string_vec.push(Some("test".to_string()));

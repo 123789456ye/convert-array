@@ -92,7 +92,7 @@ mod tests {
         let ts_values: Vec<Option<TimestampSecond>> =
             vec![TimestampSecond(1234567890), TimestampSecond(1234567891)]
                 .into_iter()
-                .map(|x| Some(x))
+                .map(Some)
                 .collect();
         let ts_vec = TimestampSecondVec::from(ts_values);
         let arrow_array = ts_vec.to_arrow_array();
@@ -109,7 +109,7 @@ mod tests {
     fn test_time_types() {
         let time_values: Vec<Option<Time32Second>> = vec![Time32Second(1800), Time32Second(3600)]
             .into_iter()
-            .map(|x| Some(x))
+            .map(Some)
             .collect();
         let time_vec = Time32SecondVec::from(time_values);
         let arrow_array = time_vec.to_arrow_array();
@@ -124,7 +124,7 @@ mod tests {
         let duration_values: Vec<Option<DurationSecond>> =
             vec![DurationSecond(3600), DurationSecond(7200)]
                 .into_iter()
-                .map(|x| Some(x))
+                .map(Some)
                 .collect();
         let duration_vec = DurationSecondVec::from(duration_values);
         let arrow_array = duration_vec.to_arrow_array();

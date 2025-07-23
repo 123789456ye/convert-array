@@ -11,18 +11,17 @@ use crate::datatype::DynScalar;
 
 // ========== List Type Implementation ==========
 
-/// A vector implementation for Arrow List arrays.
-/// Stores nested vectors and converts them to Arrow ListArray format.
-
-/// Implement Into<DynScalar> for Vec<T> (List)
-impl<T> Into<DynScalar> for Vec<T>
+impl<T> From<Vec<T>> for DynScalar
 where
     T: Into<DynScalar>,
 {
-    fn into(self) -> DynScalar {
-        DynScalar::List(self.into_iter().map(|item| item.into()).collect())
+    fn from(val: Vec<T>) -> Self {
+        DynScalar::List(val.into_iter().map(|item| item.into()).collect())
     }
 }
+
+/// A vector implementation for Arrow List arrays.
+/// Stores nested vectors and converts them to Arrow ListArray format.
 pub struct ListVec<T> {
     pub data: Vec<T>, // Flat storage of all elements
     pub field: Field,
@@ -139,24 +138,20 @@ where
 
 // ========== Map Type Implementation ==========
 
-/// A vector implementation for Arrow Map arrays.
-/// Stores nested HashMaps and converts them to Arrow MapArray format.
-
-/// Implement Into<DynScalar> for HashMap where both K and V implement Into<DynScalar>
-impl<K, V> Into<DynScalar> for HashMap<K, V>
+impl<K, V> From<HashMap<K, V>> for DynScalar
 where
     K: Clone + Into<DynScalar>,
     V: Clone + Into<DynScalar>,
 {
-    fn into(self) -> DynScalar {
-        let pairs: Vec<(DynScalar, DynScalar)> = self
-            .into_iter()
-            .map(|(k, v)| (k.into(), v.into()))
-            .collect();
+    fn from(val: HashMap<K, V>) -> Self {
+        let pairs: Vec<(DynScalar, DynScalar)> =
+            val.into_iter().map(|(k, v)| (k.into(), v.into())).collect();
         DynScalar::Map(pairs)
     }
 }
 
+/// A vector implementation for Arrow Map arrays.
+/// Stores nested HashMaps and converts them to Arrow MapArray format.
 pub struct MapVec<K, V> {
     pub data: Vec<HashMap<K, V>>,
     pub offsets: Vec<i32>,
@@ -313,21 +308,19 @@ where
 
 // ========== FixedSizeList Type Implementation ==========
 
-/// A vector implementation for Arrow FixedSizeList arrays.
-/// Stores vectors of fixed size and converts them to Arrow FixedSizeListArray format.
-
-/// Implement Into<DynScalar> for (Vec<T>, i32) (FixedSizeList)
-impl<T> Into<DynScalar> for (Vec<T>, i32)
+impl<T> From<(Vec<T>, i32)> for DynScalar
 where
     T: Into<DynScalar>,
 {
-    fn into(self) -> DynScalar {
-        let (vec, size) = self;
+    fn from(val: (Vec<T>, i32)) -> Self {
+        let (vec, size) = val;
         let scalars: Vec<DynScalar> = vec.into_iter().map(|item| item.into()).collect();
         DynScalar::FixedSizeList(scalars, size)
     }
 }
 
+/// A vector implementation for Arrow FixedSizeList arrays.
+/// Stores vectors of fixed size and converts them to Arrow FixedSizeListArray format.
 pub struct FixedSizeListVec<T> {
     pub data: Vec<T>,
     pub field: Field,
@@ -513,6 +506,7 @@ impl NativeArray for StructVec {
     type ItemRef<'a> = Option<&'a HashMap<String, DynScalar>>;
     type ArrowArray = StructArray;
 
+    #[allow(clippy::uninit_vec)]
     fn push(&mut self, item: Self::Item) {
         match item {
             Some(row) => {
@@ -663,7 +657,7 @@ mod tests {
         let native_data = vec![map1.clone(), map2.clone()];
 
         let map_vec = MapVec::from_vec_with_fields(
-            native_data.clone().into_iter().map(|x| Some(x)).collect(),
+            native_data.clone().into_iter().map(Some).collect(),
             key_field.clone(),
             value_field.clone(),
         );
@@ -787,7 +781,7 @@ mod tests {
         let native_data = vec![map1.clone(), map2.clone()];
 
         let map_vec = MapVec::from_vec_with_fields(
-            native_data.clone().into_iter().map(|x| Some(x)).collect(),
+            native_data.clone().into_iter().map(Some).collect(),
             key_field.clone(),
             value_field.clone(),
         );
@@ -841,7 +835,7 @@ mod tests {
         let inner_field = Field::new("item", DataType::Int32, false);
 
         let list_vec = ListVec::from_vec_with_field(
-            data.clone().into_iter().map(|x| Some(x)).collect(),
+            data.clone().into_iter().map(Some).collect(),
             inner_field.clone(),
         );
 
@@ -981,7 +975,7 @@ mod tests {
             },
         ];
 
-        let converted: Vec<DynScalar> = people.into_iter().map(|x| DynScalar::Struct(x)).collect();
+        let converted: Vec<DynScalar> = people.into_iter().map(DynScalar::Struct).collect();
         let arrow_array =
             dynscalar_vec_to_array(converted, &DataType::Struct(fields.clone().into()));
 
@@ -1366,7 +1360,7 @@ mod tests {
                         map.get(field_name).cloned().unwrap_or(DynScalar::Null)
                     }
                     DynScalar::Null => DynScalar::Null,
-                    _ => panic!("Unexpected: {:?}", v),
+                    _ => panic!("Unexpected: {v:?}"),
                 })
                 .collect();
 
@@ -1389,8 +1383,8 @@ mod tests {
 
         assert_eq!(struct_arr.len(), 3);
 
-        assert_eq!(struct_arr.is_null(1), true);
-        assert_eq!(struct_arr.is_valid(0), true);
+        assert!(struct_arr.is_null(1));
+        assert!(struct_arr.is_valid(0));
 
         let name_array = struct_arr
             .column(0)
@@ -1398,7 +1392,7 @@ mod tests {
             .downcast_ref::<StringArray>()
             .unwrap();
         assert_eq!(name_array.value(0), "Alice");
-        assert_eq!(name_array.is_null(1), true); // parent null → child null
+        assert!(name_array.is_null(1)); // parent null → child null
         assert_eq!(name_array.value(2), "Charlie");
 
         let age_array = struct_arr
@@ -1407,8 +1401,8 @@ mod tests {
             .downcast_ref::<Int32Array>()
             .unwrap();
         assert_eq!(age_array.value(0), 30);
-        assert_eq!(age_array.is_null(1), true); // parent null → child null
-        assert_eq!(age_array.is_null(2), true); // missing age → null
+        assert!(age_array.is_null(1)); // parent null → child null
+        assert!(age_array.is_null(2)); // missing age → null
 
         let runtime_fields = vec![
             Field::new("city", DataType::Utf8, true), // New field not in data!
@@ -1426,7 +1420,7 @@ mod tests {
                         map.get(field_name).cloned().unwrap_or(DynScalar::Null)
                     }
                     DynScalar::Null => DynScalar::Null,
-                    _ => panic!("Unexpected: {:?}", v),
+                    _ => panic!("Unexpected: {v:?}"),
                 })
                 .collect();
 
@@ -1455,7 +1449,7 @@ mod tests {
 
         assert_eq!(runtime_struct_arr.len(), 3);
 
-        assert_eq!(runtime_struct_arr.is_null(1), true);
+        assert!(runtime_struct_arr.is_null(1));
 
         let city_array = runtime_struct_arr
             .column(0)
@@ -1463,9 +1457,9 @@ mod tests {
             .downcast_ref::<StringArray>()
             .unwrap();
         assert_eq!(city_array.len(), 3);
-        assert_eq!(city_array.is_null(0), true); // All NULL because no data
-        assert_eq!(city_array.is_null(1), true); // Parent null → NULL
-        assert_eq!(city_array.is_null(2), true);
+        assert!(city_array.is_null(0)); // All NULL because no data
+        assert!(city_array.is_null(1)); // Parent null → NULL
+        assert!(city_array.is_null(2));
 
         let name_array = runtime_struct_arr
             .column(1)
@@ -1473,7 +1467,7 @@ mod tests {
             .downcast_ref::<StringArray>()
             .unwrap();
         assert_eq!(name_array.value(0), "Alice");
-        assert_eq!(name_array.is_null(1), true); // Parent null
+        assert!(name_array.is_null(1)); // Parent null
         assert_eq!(name_array.value(2), "Charlie");
     }
 

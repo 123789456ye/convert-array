@@ -136,16 +136,12 @@ impl DynNativeArray<Option<String>> for StringVec {
                 <Self as NativeArray>::push(self, None);
                 Ok(())
             }
-            _ => Err(format!("Type mismatch")),
+            _ => Err("Type mismatch".to_string()),
         }
     }
     fn get(&self, index: usize) -> Option<DynScalar> {
         let res = <Self as NativeArray>::get(self, index);
-        if let Some(res) = res {
-            Some(DynScalar::String((*res).to_string()))
-        } else {
-            None
-        }
+        res.map(|res| DynScalar::String((*res).to_string()))
     }
     fn as_native_array(&self) -> &dyn Any {
         self
@@ -172,16 +168,12 @@ impl DynNativeArray<Option<Vec<u8>>> for BinaryVec {
                 <Self as NativeArray>::push(self, None);
                 Ok(())
             }
-            _ => Err(format!("Type mismatch")),
+            _ => Err("Type mismatch".to_string()),
         }
     }
     fn get(&self, index: usize) -> Option<DynScalar> {
         let res = <Self as NativeArray>::get(self, index);
-        if let Some(res) = res {
-            Some(DynScalar::Binary((*res).to_vec()))
-        } else {
-            None
-        }
+        res.map(|res| DynScalar::Binary((*res).to_vec()))
     }
     fn as_native_array(&self) -> &dyn Any {
         self
@@ -208,16 +200,12 @@ impl DynNativeArray<Option<bool>> for BoolVec {
                 <Self as NativeArray>::push(self, None);
                 Ok(())
             }
-            _ => Err(format!("Type mismatch")),
+            _ => Err("Type mismatch".to_string()),
         }
     }
     fn get(&self, index: usize) -> Option<DynScalar> {
         let res = <Self as NativeArray>::get(self, index);
-        if let Some(res) = res {
-            Some(DynScalar::Bool(*res))
-        } else {
-            None
-        }
+        res.map(|res| DynScalar::Bool(*res))
     }
     fn as_native_array(&self) -> &dyn Any {
         self
@@ -310,9 +298,9 @@ macro_rules! impl_makedynarray_for_time {
 for_all_primitivetype_with_variant!(impl_makedynarray_for_primitive);
 for_all_timetypes!(impl_makedynarray_for_time);
 
-impl Into<DynScalar> for String {
-    fn into(self) -> DynScalar {
-        DynScalar::String(self)
+impl From<String> for DynScalar {
+    fn from(val: String) -> Self {
+        DynScalar::String(val)
     }
 }
 
@@ -335,9 +323,9 @@ impl MakeDynArray for Vec<u8> {
     }
 }
 
-impl Into<DynScalar> for bool {
-    fn into(self) -> DynScalar {
-        DynScalar::Bool(self)
+impl From<bool> for DynScalar {
+    fn from(val: bool) -> Self {
+        DynScalar::Bool(val)
     }
 }
 
@@ -347,9 +335,9 @@ impl MakeDynArray for bool {
     }
 }
 
-impl Into<DynScalar> for Decimal128Value {
-    fn into(self) -> DynScalar {
-        DynScalar::Decimal128(self)
+impl From<Decimal128Value> for DynScalar {
+    fn from(val: Decimal128Value) -> Self {
+        DynScalar::Decimal128(val)
     }
 }
 
@@ -416,17 +404,14 @@ mod tests {
 
     #[test]
     fn test_to_dyn_array_i32() {
-        let input: Vec<Option<i32>> = vec![1i32, 2, 42].into_iter().map(|x| Some(x)).collect();
+        let input: Vec<Option<i32>> = vec![1i32, 2, 42].into_iter().map(Some).collect();
         let arr = input.to_dyn_array().unwrap();
         assert_eq!(arr.get(2), Some(DynScalar::Int32(42)));
     }
 
     #[test]
     fn test_to_dyn_array_f64() {
-        let input: Vec<Option<f64>> = vec![-1.5f64, 0.0, 9.81]
-            .into_iter()
-            .map(|x| Some(x))
-            .collect();
+        let input: Vec<Option<f64>> = vec![-1.5f64, 0.0, 9.81].into_iter().map(Some).collect();
         let arr = input.to_dyn_array().unwrap();
         assert_eq!(arr.get(0), Some(DynScalar::Float64(-1.5)));
     }
@@ -436,7 +421,7 @@ mod tests {
         let input: Vec<Option<String>> =
             vec!["abc".to_string(), "def".to_string(), "114514".to_string()]
                 .into_iter()
-                .map(|x| Some(x))
+                .map(Some)
                 .collect();
         let arr = input.to_dyn_array().unwrap();
         assert_eq!(arr.get(2), Some(DynScalar::String("114514".to_string())));
@@ -464,10 +449,7 @@ mod tests {
 
     #[test]
     fn test_dyn_native_array_to_arrow() {
-        let input: Vec<Option<i32>> = vec![114, 514, 1919810]
-            .into_iter()
-            .map(|x| Some(x))
-            .collect();
+        let input: Vec<Option<i32>> = vec![114, 514, 1919810].into_iter().map(Some).collect();
         let arr: ArrayRef = input.to_dyn_array().unwrap().to_arrow_array();
         let arr = arr.as_any().downcast_ref::<Int32Array>().unwrap();
         let expected = Arc::new(Int32Array::from(input.clone()));
@@ -500,7 +482,7 @@ mod tests {
 
     #[test]
     fn test_dyn_native_option_time_array_to_arrow() {
-        let input = vec![
+        let input = [
             Some(TimestampSecond::from(114514)),
             None,
             Some(TimestampSecond::from(1919810)),
@@ -518,7 +500,7 @@ mod tests {
 
     #[test]
     fn test_dyn_native_option_decimal_array_to_arrow() {
-        let input = vec![
+        let input = [
             Some(Decimal128Value {
                 value: 12345,
                 precision: 10,
